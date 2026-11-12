@@ -1,0 +1,68 @@
+# Dependencies
+node_modules/
+
+# Build output
+build/
+out/
+lib/
+*.tsbuildinfo
+
+# dist/ 是插件安装后直接运行的产物（安装时不会构建），因此必须提交进仓库。
+dist/
+!dist/
+!dist/**
+
+# Test coverage
+coverage/
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+
+# Editor / IDE
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+.idea/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Caches
+.cache/
+.tmp/
+.eslintcache
+
+# AI tool session logs
+.claude/
+.rivet/
+.codex/
+AGENTS.md
+CLAUDE.md
+.rivet.md
+
+# 画布项目数据（工作区内，不应入库）
+.tianshu-canvas/
+
+# 画布官网（不可修改，不能读取）
+official-website/
+
+# Frameworks / bundlers
+.vite/
+.next/
+.nuxt/
+.output/
+.vercel/
+.turbo/
+
+# docs
+docs/Elvion-Tools.md
