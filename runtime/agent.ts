@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { randomUUID, createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { resolveApiKey } from '../core/config.js';
 import { errorMessage, sanitize } from '../core/security.js';
@@ -8,6 +8,7 @@ import { createToolExecutor } from '../tools/index.js';
 import { SessionStore } from './session.js';
 import { compactMessages, contextBudget, estimateInput } from './context.js';
 export interface AgentOptions { store: SessionStore; config: AppConfig; executor?: ToolExecutor; providerFactory?: (profile: ModelProfile) => ProviderAdapter }
+function profileFingerprint(profile: ModelProfile): string { return createHash('sha256').update(JSON.stringify({ id: profile.id, protocol: profile.protocol, baseUrl: profile.baseUrl, model: profile.model })).digest('hex'); }
 export class AgentRuntime {
   private config: AppConfig; private store: SessionStore; private executor: ToolExecutor; private factory: (p: ModelProfile) => ProviderAdapter;
   private messages: Message[] = []; private snapshot: RuntimeSnapshot; private listeners = new Set<(s: RuntimeSnapshot) => void>();
@@ -18,12 +19,20 @@ export class AgentRuntime {
     this.config = options.config; this.store = options.store; this.executor = options.executor || createToolExecutor(); this.factory = options.providerFactory || createProvider;
     this.rememberSecrets(options.config);
     const saved = this.store.latestState(); const profileId = saved?.profileId || this.config.activeProfileId;
-    this.messages = saved?.messages || [];
-    this.snapshot = { sessionId: this.store.info.id, title: this.store.info.title, cwd: this.store.info.cwd, status: 'idle', permission: 'ask', entries: saved?.entries || [], profile: this.config.profiles.find(p => p.id === profileId), contextPercent: 0, estimated: true, todos: saved?.todos || [], restored: !!saved, compactPending: false };
+    this.messages = structuredClone(saved?.messages || []);
+    this.snapshot = { sessionId: this.store.info.id, title: this.store.info.title, cwd: this.store.info.cwd, status: 'idle', permission: 'ask', entries: structuredClone(saved?.entries || []), profile: this.config.profiles.find(p => p.id === profileId), contextPercent: 0, estimated: true, todos: structuredClone(saved?.todos || []), restored: !!saved, compactPending: false };
     if (saved) {
+      if (!this.snapshot.profile || saved.profileFingerprint !== profileFingerprint(this.snapshot.profile)) {
+        for (const message of this.messages) delete message.providerData;
+      }
+      this.replayDurableToolResults();
       const results = new Set(this.messages.filter(m => m.role === 'tool').map(m => m.toolCallId));
       for (const message of this.messages) for (const call of message.toolCalls || []) if (!results.has(call.id)) {
-        this.messages.push({ role: 'tool', toolCallId: call.id, content: '上次操作中断，结果未知。请先核实，不得自动重跑。' });
+        const unknown = '上次操作中断，结果未知。请先核实，不得自动重跑。';
+        this.messages.push({ role: 'tool', toolCallId: call.id, content: unknown });
+        let card = this.snapshot.entries.find(entry => entry.kind === 'tool' && entry.toolCall?.id === call.id);
+        if (!card) card = this.entry('tool', call.name + ' ' + JSON.stringify(call.arguments), { toolName: call.name, toolCall: this.clean(call) });
+        card.status = '结果未知'; if (!card.output) card.output = unknown;
         this.entry('system', '上次操作结果未知：' + call.name + ' ' + JSON.stringify(call.arguments));
       }
       for (const entry of this.snapshot.entries) if (entry.kind === 'tool' && ['executing', 'approving', '执行中', '等待确认'].includes(entry.status || '')) entry.status = '结果未知';
@@ -31,9 +40,36 @@ export class AgentRuntime {
     }
     this.initialized = this.initialize(); this.rebudget();
   }
+  private replayDurableToolResults(): void {
+    const lastState = this.store.events.findLastIndex(event => event.type === 'state');
+    const calls = new Map(this.messages.flatMap(message => message.toolCalls || []).map(call => [call.id, call]));
+    const results = new Set(this.messages.filter(message => message.role === 'tool').map(message => message.toolCallId));
+    for (const event of this.store.events.slice(lastState + 1)) {
+      if (event.type !== 'tool-end' || !event.data || typeof event.data !== 'object') continue;
+      const data = event.data as { id?: unknown; status?: unknown; result?: { content?: unknown; isError?: unknown; metadata?: Record<string, unknown> } };
+      if (typeof data.id !== 'string' || typeof data.result?.content !== 'string') continue;
+      const call = calls.get(data.id); if (!call) continue;
+      const content = sanitize(data.result.content, this.secrets());
+      if (!results.has(data.id)) { this.messages.push({ role: 'tool', toolCallId: data.id, content }); results.add(data.id); }
+      let card = this.snapshot.entries.find(entry => entry.kind === 'tool' && entry.toolCall?.id === data.id);
+      if (!card) card = this.entry('tool', call.name + ' ' + JSON.stringify(call.arguments), { toolName: call.name, toolCall: this.clean(call), timestamp: event.timestamp });
+      card.output = content;
+      card.status = typeof data.status === 'string' ? sanitize(data.status, this.secrets()) : data.result.isError ? '失败' : '完成';
+      card.metadata = this.clean({ ...data.result.metadata, durableRecovery: true });
+    }
+  }
   private rememberSecrets(config: AppConfig): void { for (const p of config.profiles) for (const secret of [p.apiKey, p.apiKeyEnv ? process.env[p.apiKeyEnv] : undefined]) if (secret) this.knownSecrets.add(secret); }
   private secrets(): string[] { this.rememberSecrets(this.config); return [...this.knownSecrets]; }
-  private clean<T>(value: T): T { return JSON.parse(sanitize(JSON.stringify(value), this.secrets())) as T; }
+  private clean<T>(value: T): T {
+    const secrets = this.secrets();
+    const visit = (item: unknown): unknown => {
+      if (typeof item === 'string') return sanitize(item, secrets);
+      if (Array.isArray(item)) return item.map(visit);
+      if (item && typeof item === 'object') return Object.fromEntries(Object.entries(item).map(([key, child]) => [sanitize(key, secrets), visit(child)]));
+      return item;
+    };
+    return visit(value) as T;
+  }
   private async initialize(): Promise<void> {
     if (!this.messages.length) {
       const system = await readFile(new URL('../prompts/system.md', import.meta.url), 'utf8');
@@ -46,8 +82,8 @@ export class AgentRuntime {
   subscribe(listener: (s: RuntimeSnapshot) => void): () => void { this.listeners.add(listener); return () => this.listeners.delete(listener); }
   private emit(): void { const state = this.getSnapshot(); for (const listener of this.listeners) listener(state); }
   private entry(kind: TranscriptEntry['kind'], content: string, extra: Partial<TranscriptEntry> = {}): TranscriptEntry { const entry = { id: randomUUID(), kind, content: sanitize(content, this.secrets()), timestamp: new Date().toISOString(), ...extra }; this.snapshot.entries.push(entry); return entry; }
-  private async persist(): Promise<void> { await this.store.append('state', this.clean({ messages: this.messages, entries: this.snapshot.entries, profileId: this.snapshot.profile?.id, todos: this.snapshot.todos })); }
-  private rebudget(): void { if (this.snapshot.profile) this.snapshot.contextPercent = estimateInput(this.messages, this.executor.definitions) * this.calibration / this.snapshot.profile.contextWindow * 100; }
+  private async persist(): Promise<void> { await this.store.append('state', this.clean({ messages: this.messages, entries: this.snapshot.entries, profileId: this.snapshot.profile?.id, profileFingerprint: this.snapshot.profile ? profileFingerprint(this.snapshot.profile) : undefined, todos: this.snapshot.todos })); }
+  private rebudget(): void { this.snapshot.estimated = true; if (this.snapshot.profile) this.snapshot.contextPercent = estimateInput(this.messages, this.executor.definitions) * this.calibration / this.snapshot.profile.contextWindow * 100; }
   private profile(): ModelProfile { const profile = this.snapshot.profile; if (!profile) throw new Error('请先通过 /provider 配置供应商和模型'); return profile; }
   updateConfig(config: AppConfig): void {
     const old = this.snapshot.profile; this.rememberSecrets(this.config); this.config = config; this.rememberSecrets(config);
@@ -111,7 +147,7 @@ export class AgentRuntime {
           if (event.type === 'tool') calls.push(event.call);
           if (event.type === 'provider-data') items = event.items;
           if (event.type === 'done') done = true;
-          if (event.type === 'usage' && event.usage.inputTokens > 0) { this.calibration = Math.max(0.5, event.usage.inputTokens / estimateInput(this.messages, this.executor.definitions)); this.snapshot.estimated = false; entry.metadata = { usage: event.usage }; }
+          if (event.type === 'usage' && event.usage.inputTokens > 0) { this.calibration = Math.max(0.5, event.usage.inputTokens / estimateInput(this.messages, this.executor.definitions)); this.snapshot.contextPercent = event.usage.inputTokens / profile.contextWindow * 100; this.snapshot.estimated = false; entry.metadata = { usage: event.usage }; this.emit(); }
         }
         if (!done) throw new Error('模型流在完成前中断，未执行任何未确认调用');
       } catch (error) { entry.status = signal.aborted ? '已取消' : '失败'; if (content) this.messages.push({ role: 'assistant', content: sanitize(content, this.secrets()) + '\n[此回复中断，工具调用未执行]' }); await this.persist(); throw error; }

@@ -156,6 +156,7 @@ async function execute(call: ToolCall, context: ToolContext): Promise<ToolResult
           if (changes.some(change => process.platform === 'win32' ? change.target.toLocaleLowerCase() === target.toLocaleLowerCase() : change.target === target)) throw new Error('补丁包含重复目标文件。');
           const original = await existingText(target); if (!oldInput && original !== undefined) throw new Error('新增目标已存在。'); if (oldInput && original === undefined) throw new Error('待修改目标不存在。');
           const next = applyPatch(original ?? '', patch, { fuzzFactor: 0 }); if (next === false) throw new Error(`补丁与文件不匹配：${input}`);
+          if (!newInput && next !== '') throw new Error(`删除补丁必须移除文件全部内容：${input}`);
           if (Buffer.byteLength(next) > MAX_READ) throw new Error('补丁结果超过文件大小上限。');
           changes.push({ input, target, original, next: newInput ? next : undefined });
         }

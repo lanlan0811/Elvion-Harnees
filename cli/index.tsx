@@ -13,6 +13,7 @@ import { inspectBash } from '../execution/bash.js';
 import { App } from './app.js';
 import { theme, Welcome } from './welcome.js';
 import { truncate } from './editor.js';
+import { diagnoseSessionLocks } from './doctor.js';
 
 const help = [
   'ELVION CLI v0.1.0', 'Your Partner in Action.', '', '用法：',
@@ -54,6 +55,7 @@ async function doctor(): Promise<number> {
     for (const profile of config.profiles) { let present = true; try { resolveApiKey(profile); } catch { present = false; } checks.push({ name: `模型 ${profile.name} / ${profile.model}`, state: present ? '未验证' : '失败', details: present ? '配置及密钥存在；未请求真实 API' : '未配置可用密钥' }); }
   } catch (error) { checks.push({ name: '配置文件', state: '失败', details: sanitize(error instanceof Error ? error.message : String(error)) }); }
   try { await access(getAppHome(), constants.R_OK | constants.W_OK); checks.push({ name: '会话目录', state: '通过', details: getAppHome() }); } catch { checks.push({ name: '会话目录', state: '未验证', details: '首次创建会话时初始化：' + getAppHome() }); }
+  checks.push(...await diagnoseSessionLocks());
   checks.push({ name: '人工平台验收', state: '未验证', details: '中文 IME、真实终端视觉及真实供应商连接需要单独验收' });
   process.stdout.write(checks.map(check => `[${check.state}] ${check.name}：${check.details}`).join('\n') + '\n');
   return checks.some(check => check.state === '失败') ? 1 : 0;

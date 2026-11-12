@@ -5,7 +5,7 @@ import { randomUUID, createHash } from 'node:crypto';
 import { getAppHome } from '../core/config.js';
 import type { Message, SessionInfo, TranscriptEntry, TodoItem } from '../core/types.js';
 export interface SessionEvent { seq: number; type: string; timestamp: string; data: unknown; previousHash: string; hash: string }
-export interface PersistedState { messages: Message[]; entries: TranscriptEntry[]; profileId?: string; todos: TodoItem[] }
+export interface PersistedState { messages: Message[]; entries: TranscriptEntry[]; profileId?: string; profileFingerprint?: string; todos: TodoItem[] }
 function hash(value: unknown): string { return createHash('sha256').update(JSON.stringify(value)).digest('hex'); }
 function alive(pid: number): boolean { try { process.kill(pid, 0); return true; } catch (e) { return (e as NodeJS.ErrnoException).code === 'EPERM'; } }
 function validId(id: string): boolean { return /^[a-f0-9-]{36}$/.test(id); }

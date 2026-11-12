@@ -61,6 +61,16 @@ export function truncate(value: string, width: number): string {
   let result = ''; for (const char of graphemes(value)) { if (stringWidth(result + char) > Math.max(0, width - 1)) break; result += char; }
   return result + '…';
 }
+export function sliceColumns(value: string, offset: number, width: number): string {
+  let column = 0; let result = ''; let used = 0;
+  for (const char of graphemes(safeText(value))) {
+    const size = stringWidth(char);
+    if (column < offset) { if (column + size > offset) { result += ' '; used++; } column += size; continue; }
+    if (used + size > width) break;
+    result += char; used += size; column += size;
+  }
+  return result;
+}
 export function cursorPosition(state: EditorState, width: number): { x: number; y: number } {
   const before = graphemes(state.text).slice(0, state.cursor).join('');
   const lines = wrapLines(before, width);

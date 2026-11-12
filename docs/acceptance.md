@@ -12,10 +12,10 @@
 |---|---|---|
 | 三协议 Provider | 已通过 | tests/providers.test.ts 的19项本地 HTTP 契约测试，不连接远端服务 |
 | Provider strict 类型与 lint | 已通过 | 三模块独立严格检查及测试文件 lint |
-| 全工程 typecheck/lint/test/build | 已通过 | npm run check；10个测试文件95项，0失败0跳过，Node24.22.1、Windows10 19045 x64 |
+| 全工程 typecheck/lint/test/build | 已通过 | npm run check；12个测试文件120项，0失败0跳过，Node24.22.1、Windows10 19045 x64 |
 | Windows PortableGit 与 Job Object | 已通过 | 官方固定归档SHA校验、Zig编译启动器；中文空格cwd、真实Git、超时、输出上限、取消孙进程与父进程强杀清理 |
 | 会话恢复、锁与崩溃恢复 | 已通过 | 独占与过期锁并发、完整记录损坏、尾部半条日志、工具结果未知不重放、resume重置权限 |
-| 打包安装 | 已通过 | npm run test:package：真实主包tarball、ignore-scripts、中文/空格安装路径、命令帮助、狐狸资源、平台Bash；平台目录复制模拟依赖，不能代替公开registry验收 |
+| 打包安装 | 已通过 | npm run test:package：真实主包与Windows平台tarball经npm安装，ignore-scripts、隔离配置、中文/空格路径、版本/帮助/狐狸资源、实际执行内置Bash，移走平台包后必须报错且不回退；尚非公开registry安装 |
 | 生产依赖审计 | 已通过 | npm audit --omit=dev --audit-level=high：0 vulnerabilities |
 | 精确 main 的远端 CI | 未验证 | 推送后核对工作流 SHA，本地测试不能代替 |
 
@@ -29,6 +29,20 @@
 | 静态视觉 | 已通过 | 真实素材与响应断点测试；App渲染行数与宽度检查，artifacts/welcome-*.txt为构建输出；不等同真终端或IME验收 |
 | PortableGit 全组件源码和许可材料 | 未准备 | 精确版本材料、build-extra提交、全组件来源清单 |
 | npm 身份与三个包发布权限 | 未配置 | trusted publishing或NPM_TOKEN，首次发布权限需核实 |
+
+## 缺陷复现与防复发
+
+- Windows PowerShell 5.1 在英文 runner 将无 BOM 的 UTF-8 构建脚本误解码，导致原生启动器构建前解析失败。构建脚本改为 ASCII；tests/build-scripts.test.ts 同时验证字符集和真实 5.1 解析，不执行编译作为替代。
+- 英文 Windows runner 的 tar 命令不能通过旧代码页解析中文 -C 参数。安装验收改为 Unicode cwd 与纯 ASCII tar 参数，仍保留真实中文和空格安装路径。
+- 密钥包含引号或反斜线时，先序列化再替换会漏掉转义后的凭据。改为递归清理每个字符串；运行时测试直接检查持久日志中没有转义密钥。
+- 待批准／问答回调同步取消曾可能留下等待 Promise；已验证取消不会执行写入，恢复不重跑已产生副作用的工具。
+- 长工具详情的左右键现在独立横向滚动，中文字符按显示列裁切；待办及基础 Markdown 纳入界面回归。
+- doctor 对 lock-claim 残留和损坏锁只读报错并给出路径，不按时间自动抢锁；诊断测试核实文件未被删除或改写。
+- resume 同一配置 ID 但模型、地址或协议已修改时，校验持久化的精确配置指纹后清除不兼容的私有状态；旧日志无指纹时也保守清除，通用消息继续保留。
+- 工具完成事件已 fsync 而下一份状态快照尚未写入时，恢复重放已确认的 tool-end 结果关闭事务；只有没有完成结果的调用才标为未知，任何情况均不自动重跑。
+- 新消息预算仍使用估算及 usage 校准，必须持续显示估算标记；不能因为前一次收到真实 usage 就将后续预测标成实测。
+- apply_patch 删除到 /dev/null 必须确实删除全部原文，残留内容则拒绝整个批次；回归检查未展示内容不丢失且前置合法修改也未落盘。
+- Linux 仅承担发行归档与发布，不执行本项目不支持的 Linux Bash 集成测试；完整执行和安装验收由前置 Windows/macOS CI 及发行平台作业承担，发布作业仍要求其成功并重新核对 SHA。
 
 ## CI 与发布门禁
 

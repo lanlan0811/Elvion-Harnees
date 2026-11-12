@@ -120,8 +120,8 @@ jobs:
           SOURCE_URL: ${{ inputs.source_url }}
           SOURCE_SHA256: ${{ inputs.source_sha256 }}
         run: node scripts/verify-sources.mjs "$SOURCE_URL" "$SOURCE_SHA256"
-      - run: npm run build
-      - run: npm run check
+      - name: Validate publication checkout after supported-platform checks
+        run: npm run typecheck && npm run lint && npm run build
       - name: Recheck main and CI before publishing
         env:
           GITHUB_TOKEN: ${{ github.token }}

@@ -60,6 +60,18 @@ describe('local tools and permission enforcement', () => {
     context.permission = 'full';
     for (const patch of ['diff --git a/a b/a\nnew file mode 100644\n--- /dev/null\n+++ b/a\n', 'GIT binary patch\nliteral 0\n', '--- a/a\n+++ b/a\n']) expect((await run('apply_patch', { patch })).isError).toBe(true);
   });
+  it('rejects incomplete deletion patches before any batch write and permits exact complete deletion', async () => {
+    context.permission = 'edit';
+    await writeFile(path.join(workspace, 'keep'), 'old\n'); await writeFile(path.join(workspace, 'target'), 'first\nsecond\n');
+    const change = '--- a/keep\n+++ b/keep\n@@ -1 +1 @@\n-old\n+new\n';
+    const incompleteDeletion = '--- a/target\n+++ /dev/null\n@@ -1 +0,0 @@\n-first\n';
+    const rejected = await run('apply_patch', { patch: change + incompleteDeletion });
+    expect(rejected.isError).toBe(true); expect(rejected.content).toContain('删除补丁必须移除文件全部内容');
+    expect(await readFile(path.join(workspace, 'keep'), 'utf8')).toBe('old\n'); expect(await readFile(path.join(workspace, 'target'), 'utf8')).toBe('first\nsecond\n');
+    const completeDeletion = '--- a/target\n+++ /dev/null\n@@ -1,2 +0,0 @@\n-first\n-second\n';
+    expect((await run('apply_patch', { patch: change + completeDeletion })).isError).not.toBe(true);
+    expect(await readFile(path.join(workspace, 'keep'), 'utf8')).toBe('new\n'); await expect(readFile(path.join(workspace, 'target'))).rejects.toThrow();
+  });
   it.skipIf(process.platform !== 'win32')('rejects Windows devices and alternate data streams', async () => {
     context.permission = 'full';
     for (const target of ['file.txt:secret', 'NUL', 'con.txt', '//?/C:/temp/file']) expect((await run('write_file', { path: target, content: 'bad' })).isError).toBe(true);

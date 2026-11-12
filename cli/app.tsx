@@ -1,9 +1,11 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
+import stringWidth from 'string-width';
 import { Box, Text, useApp, useCursor, useInput, usePaste, useStdin, useWindowSize } from 'ink';
 import type { AppConfig, PermissionMode, RuntimeSnapshot, TranscriptEntry } from '../core/types.js';
 import { parseTokenCount, resolveApiKey, saveConfig } from '../core/config.js';
 import { ConfigForm, createProfileForm, fieldKeys, formFields, presets, profileFromForm, protocolOptions, type ProfileForm } from './config-form.js';
-import { cursorPosition, deleteBackward, deleteForward, graphemes, insertText, lineBoundary, moveCursor, moveVertical, safeText, truncate, wrapLines, type EditorState } from './editor.js';
+import { cursorPosition, deleteBackward, deleteForward, graphemes, insertText, lineBoundary, moveCursor, moveVertical, safeText, sliceColumns, truncate, wrapLines, type EditorState } from './editor.js';
+import { markdownRows, type MarkdownSegment } from './markdown.js';
 import { theme, Welcome, welcomeLayout } from './welcome.js';
 
 export interface UIRuntime {
@@ -17,7 +19,15 @@ const statusLabels: Record<string, string> = { idle: '就绪', requesting: '请�
 const active = (status: RuntimeSnapshot['status']) => !['idle', 'cancelled', 'failed'].includes(status);
 const commands = ['/provider', '/model', '/permissions', '/compact', '/help', '/exit'];
 type Overlay = 'none' | 'profiles' | 'models' | 'presets' | 'form' | 'permissions' | 'permission-confirm' | 'help' | 'tools' | 'detail';
-interface Row { text: string; color?: string; bold?: boolean }
+interface Row { text: string; color?: string; bold?: boolean; segments?: MarkdownSegment[] }
+
+export function toolDetailLines(entry: TranscriptEntry): string[] {
+  const argumentsText = Object.entries(entry.toolCall?.arguments ?? {}).flatMap(([key, value]) =>
+    typeof value === 'string' && (value.includes('\n') || ['command', 'content', 'patch', 'old_text', 'new_text'].includes(key))
+      ? [`${key}:`, value]
+      : [`${key}: ${JSON.stringify(value)}`]).join('\n');
+  return safeText(`参数\n${argumentsText || '{}'}\n\n输出\n${entry.output ?? entry.content}\n\n元数据\n${JSON.stringify(entry.metadata ?? {}, null, 2)}`).split('\n');
+}
 
 export function transcriptRows(entries: TranscriptEntry[], width: number): Row[] {
   const rows: Row[] = [];
@@ -26,12 +36,8 @@ export function transcriptRows(entries: TranscriptEntry[], width: number): Row[]
     const time = entry.timestamp.slice(11, 16);
     if (entry.kind === 'user') { add(`你  ${time}`, theme.accent, true); add(entry.content); }
     else if (entry.kind === 'assistant') {
-      add('ELVION', theme.accent, true); let code = false;
-      for (const line of entry.content.split('\n')) {
-        if (line.trimStart().startsWith('```')) { code = !code; if (code) add('代码 ' + line.trim().slice(3), theme.muted); continue; }
-        if (!code && /^#{1,6} /.test(line)) add(line.replace(/^#{1,6} /, ''), theme.text, true);
-        else add(code ? '  ' + line : line, code && line.startsWith('+') ? theme.success : code && line.startsWith('-') ? theme.error : theme.text);
-      }
+      add('ELVION', theme.accent, true);
+      rows.push(...markdownRows(entry.content, width).map(row => ({ ...row, color: row.code && row.text.trimStart().startsWith('+') ? theme.success : row.code && row.text.trimStart().startsWith('-') ? theme.error : theme.text })));
     }
     else if (entry.kind === 'system') add(`${time}  ${entry.content}`, /未知|压缩|75%|95%/.test(entry.content) ? theme.warning : theme.muted);
     else {
@@ -58,6 +64,7 @@ export function App({ runtime, config: initialConfig, bash, dimensions, initialO
   const [overlay, setOverlay] = useState<Overlay>(initialOverlay ?? 'none');
   const [selected, setSelected] = useState(0); const [filter, setFilter] = useState('');
   const [scrollTop, setScrollTop] = useState<number | null>(null); const [dialogScroll, setDialogScroll] = useState(0);
+  const [detailOffset, setDetailOffset] = useState(0);
   const [notice, setNotice] = useState(''); const [approvalChoice, setApprovalChoice] = useState(false);
   const [questionChoice, setQuestionChoice] = useState(0); const [answerDraft, setAnswerDraft] = useState<EditorState>({ text: '', cursor: 0 });
   const [form, setForm] = useState<ProfileForm>(() => createProfileForm()); const [formFocus, setFormFocus] = useState(0);
@@ -79,16 +86,18 @@ export function App({ runtime, config: initialConfig, bash, dimensions, initialO
   const dialogHeight = hasDialog ? Math.max(7, Math.min(Math.floor(rows * 0.58), rows - 8)) : 0;
   const historyHeight = Math.max(1, rows - 2 - 1 - inputHeight - 1 - 2 - (notice ? 1 : 0) - dialogHeight);
   const entries = useMemo(() => transcriptRows(snapshot.entries, bodyWidth), [snapshot.entries, bodyWidth]);
-  const maxScroll = Math.max(0, entries.length - historyHeight);
+  const todoHeight = snapshot.todos.length ? Math.min(4, Math.max(1, Math.floor(historyHeight / 4))) : 0;
+  const transcriptHeight = Math.max(1, historyHeight - todoHeight);
+  const maxScroll = Math.max(0, entries.length - transcriptHeight);
   const historyStart = scrollTop === null ? maxScroll : Math.min(maxScroll, scrollTop);
-  const visibleRows = entries.slice(historyStart, historyStart + historyHeight);
+  const visibleRows = entries.slice(historyStart, historyStart + transcriptHeight);
   const welcome = snapshot.entries.length === 0 && !snapshot.restored;
   const tooSmall = welcomeLayout(columns, rows) === 'too-small';
   const isBusy = active(snapshot.status);
   if (!hasDialog && !tooSmall) setCursorPosition({ x: 4 + cursor.x, y: rows - 3 - inputHeight + cursor.y - inputStart });
   else setCursorPosition(undefined);
 
-  const open = (value: Overlay) => { setOverlay(value); setSelected(0); setFilter(''); setDialogScroll(0); setFormError(undefined); };
+  const open = (value: Overlay) => { setOverlay(value); setSelected(0); setFilter(''); setDialogScroll(0); setDetailOffset(0); setFormError(undefined); };
   useEffect(() => {
     // Ink suppresses function-key names in useInput; observe only F2 without consuming the stream.
     let suffix = ''; let pasted = false;
@@ -209,7 +218,10 @@ export function App({ runtime, config: initialConfig, bash, dimensions, initialO
         } else if (overlay === 'tools') { const entry = tools[selected]; if (entry) { setDetailEntry(entry); open('detail'); } }
       } else if ((overlay === 'profiles' || overlay === 'models') && (key.backspace || key.delete)) { setFilter(value => graphemes(value).slice(0, -1).join('')); setSelected(0); }
       else if ((overlay === 'profiles' || overlay === 'models') && input && !key.ctrl && !key.meta) { setFilter(value => value + safeText(input)); setSelected(0); }
-      else if (overlay === 'detail' && key.rightArrow) setDialogScroll(value => value + 1);
+      else if (overlay === 'detail' && (key.rightArrow || key.leftArrow)) {
+        const max = detailEntry ? toolDetailLines(detailEntry).reduce((width, line) => Math.max(width, stringWidth(line) - (bodyWidth - 4)), 0) : 0;
+        setDetailOffset(value => Math.max(0, Math.min(max, value + (key.rightArrow ? 8 : -8))));
+      }
       return;
     }
     if (key.pageUp) { setScrollTop(value => Math.max(0, (value ?? maxScroll) - Math.max(1, historyHeight - 1))); return; }
@@ -232,7 +244,7 @@ export function App({ runtime, config: initialConfig, bash, dimensions, initialO
     if (snapshot.approval) return [{ text: `执行确认：${snapshot.approval.title}`, color: theme.warning, bold: true }, ...wrapLines(snapshot.approval.details, bodyWidth - 4).map(text => ({ text })), { text: '批准仅作用于当前操作；Esc 拒绝。', color: theme.muted }];
     if (snapshot.question) return [{ text: 'ELVION 需要你的回答', color: theme.accent, bold: true }, ...wrapLines(snapshot.question.question, bodyWidth - 4).map(text => ({ text }))];
     if (overlay === 'help') return wrapLines('命令：/provider 供应商与模型；/model 当前供应商模型；/permissions 三种权限；/compact 压缩当前会话；/help 帮助；/exit 退出。\n快捷键：Enter 发送；Ctrl+J 换行；PgUp/PgDn 历史；Ctrl+End 回到底部；F2 工具详情；Ctrl+C 取消当前轮，空闲时退出。\n运行中普通消息仅作为草稿，不自动排队。Provider 与模型选择下轮生效。每次启动或恢复均回到每次询问。Esc 返回。', bodyWidth - 4).map(text => ({ text }));
-    if (overlay === 'detail' && detailEntry) return [{ text: `${detailEntry.toolName}  [${detailEntry.status ?? '未知'}]`, color: theme.accent }, ...wrapLines(JSON.stringify(detailEntry.toolCall?.arguments ?? {}, null, 2) + '\n\n' + (detailEntry.output ?? detailEntry.content) + '\n\n' + JSON.stringify(detailEntry.metadata ?? {}, null, 2), bodyWidth - 4).map(text => ({ text }))];
+    if (overlay === 'detail' && detailEntry) return [{ text: `${detailEntry.toolName} [${detailEntry.status ?? '未知'}] · 左右横移 ${detailOffset} 列 · PgUp/PgDn 纵向`, color: theme.accent }, ...toolDetailLines(detailEntry).map(text => ({ text: sliceColumns(text, detailOffset, bodyWidth - 4) }))];
     return [];
   };
   const renderDialog = () => {
@@ -262,7 +274,8 @@ export function App({ runtime, config: initialConfig, bash, dimensions, initialO
       <Text color={theme.muted}>{truncate(`项目 ${snapshot.cwd} | ${statusLabels[snapshot.status] ?? snapshot.status}`, bodyWidth)}</Text>
     </Box>
     <Box height={historyHeight} flexShrink={0} flexDirection="column" overflow="hidden">
-      {welcome && !hasDialog ? <Welcome columns={columns} rows={rows} bashAvailable={bash.available} bashError={bash.error} providerConfigured={!!snapshot.profile} /> : visibleRows.map((row, index) => <Text key={historyStart + index} color={row.color} bold={row.bold} wrap="truncate-end">{row.text || ' '}</Text>)}
+      {todoHeight > 0 && <Box flexDirection="column" height={todoHeight} flexShrink={0}>{snapshot.todos.slice(0, todoHeight).map((todo, index) => <Text key={index} color={todo.status === 'in_progress' ? theme.accent : theme.muted} wrap="truncate-end">{truncate(`${todo.status === 'completed' ? '[x]' : todo.status === 'in_progress' ? '[>]' : '[ ]'} ${todo.text}${index === todoHeight - 1 && snapshot.todos.length > todoHeight ? ` （另 ${snapshot.todos.length - todoHeight} 项，F2 查看 todo 记录）` : ''}`, bodyWidth)}</Text>)}</Box>}
+      {welcome && !hasDialog && !todoHeight ? <Welcome columns={columns} rows={rows} bashAvailable={bash.available} bashError={bash.error} providerConfigured={!!snapshot.profile} /> : visibleRows.map((row, index) => <Text key={historyStart + index} color={row.color} bold={row.bold} wrap="truncate-end">{row.segments ? row.segments.map((segment, part) => <Text key={part} bold={row.bold || segment.bold} color={segment.code ? theme.accent : row.color}>{segment.text}</Text>) : row.text || ' '}</Text>)}
     </Box>
     {renderDialog()}
     {notice && <Text color={theme.warning} wrap="truncate-end">{notice}</Text>}

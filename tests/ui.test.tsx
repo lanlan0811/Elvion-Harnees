@@ -3,10 +3,11 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 import { render, cleanup } from 'ink-testing-library';
 import stringWidth from 'string-width';
 import stripAnsi from 'strip-ansi';
-import { App, transcriptRows, type UIRuntime } from '../cli/app.js';
+import { App, toolDetailLines, transcriptRows, type UIRuntime } from '../cli/app.js';
 import { Welcome, welcomeLayout, foxLarge, foxSmall } from '../cli/welcome.js';
 import { createProfileForm, profileFromForm } from '../cli/config-form.js';
-import { cursorPosition, deleteBackward, deleteForward, graphemes, insertText, lineBoundary, moveCursor, moveVertical, safeText, wrapLines } from '../cli/editor.js';
+import { cursorPosition, deleteBackward, deleteForward, graphemes, insertText, lineBoundary, moveCursor, moveVertical, safeText, sliceColumns, wrapLines } from '../cli/editor.js';
+import { markdownRows } from '../cli/markdown.js';
 import { parseTokenCount } from '../core/config.js';
 import type { RuntimeSnapshot } from '../core/types.js';
 
@@ -35,6 +36,28 @@ describe('Chinese grapheme editor', () => {
     expect(safeText('\u001b]52;c;attack\u0007你好\r\n/exit')).toBe('你好\n/exit');
     expect(safeText('第一行\r第二行')).toBe('第一行\n第二行');
     expect(insertText({ text: '', cursor: 0 }, '第一行\n/exit').text).toBe('第一行\n/exit');
+  });
+  it('slices tool lines by display columns without splitting a Chinese glyph', () => {
+    expect(sliceColumns('甲乙abc', 2, 3)).toBe('乙a');
+    expect(sliceColumns('甲乙abc', 1, 3)).toBe(' 乙');
+    expect(stringWidth(sliceColumns('甲乙abc', 1, 3))).toBe(3);
+  });
+});
+
+describe('basic readable Markdown', () => {
+  it('formats headings bold spans lists and code without markup noise', () => {
+    const rows = markdownRows('# 标题\n这是**重点**和 `code`\n* 第一项\n```ts\nconst value = 1;\n```', 60);
+    expect(rows[0]).toMatchObject({ text: '标题', bold: true });
+    expect(rows.some(row => row.segments?.some(segment => segment.text === '重点' && segment.bold))).toBe(true);
+    expect(rows.map(row => row.text).join('\n')).toContain('- 第一项');
+    expect(rows.some(row => row.code && row.text.includes('const value'))).toBe(true);
+    expect(rows.map(row => row.text).join('\n')).not.toContain('**');
+  });
+  it('renders basic tables with aligned readable Chinese cells', () => {
+    const rows = markdownRows('| 字段 | 值 |\n| --- | --- |\n| 模型 | 自定义 |\n| 输出 | 384k |', 60);
+    expect(rows[0]?.bold).toBe(true); expect(rows[1]?.text).toContain('┼');
+    expect(rows.map(row => row.text).join('\n')).toContain('384k');
+    expect(rows.every(row => stringWidth(row.text) <= 60)).toBe(true);
   });
 });
 
@@ -92,6 +115,32 @@ describe('runtime interaction surfaces', () => {
     const runtime = fakeRuntime({ restored: true, entries: [{ id: 'tool1', kind: 'tool', timestamp: '2026-11-12T12:00:00Z', content: 'output', toolName: 'bash', status: '完成' }] });
     const app = render(<App runtime={runtime} config={{ version: 1, profiles: [] }} bash={{ available: true }} dimensions={{ columns: 100, rows: 34 }} />); await pause();
     app.stdin.write('\u001bOQ'); await pause(); expect(app.lastFrame()).toContain('工具记录');
+  });
+  it('shows todo statuses within the history without obscuring permission footer', async () => {
+    const runtime = fakeRuntime({ restored: true, todos: [{ text: '检查代码', status: 'completed' }, { text: '修复缺陷', status: 'in_progress' }, { text: '验证结果', status: 'pending' }] });
+    const app = render(<App runtime={runtime} config={{ version: 1, profiles: [] }} bash={{ available: true }} dimensions={{ columns: 100, rows: 34 }} />); await pause();
+    const frame = app.lastFrame() ?? ''; expect(frame).toContain('[x] 检查代码'); expect(frame).toContain('[>] 修复缺陷'); expect(frame).toContain('[ ] 验证结果'); expect(frame).toContain('每次询问');
+  });
+  it('moves tool details horizontally without changing their vertical anchor', async () => {
+    const runtime = fakeRuntime({ restored: true, entries: [{ id: 'tool1', kind: 'tool', timestamp: '2026-11-12T12:00:00Z', content: 'BEGIN:' + 'a'.repeat(90) + ':END', output: 'BEGIN:' + 'a'.repeat(90) + ':END', toolName: 'bash', status: '完成' }] });
+    const app = render(<App runtime={runtime} config={{ version: 1, profiles: [] }} bash={{ available: true }} dimensions={{ columns: 80, rows: 24 }} />); await pause();
+    app.stdin.write('\u001bOQ'); await pause(); app.stdin.write('\r'); await pause();
+    expect(app.lastFrame()).toContain('横移 0 列');
+    const before = stripAnsi(app.lastFrame() ?? '').split('\n'); const anchor = before.findLastIndex(line => line.includes('BEGIN:')); expect(anchor).toBeGreaterThan(0);
+    app.stdin.write('\u001b[C'); await pause(); expect(app.lastFrame()).toContain('横移 8 列');
+    const after = stripAnsi(app.lastFrame() ?? '').split('\n'); expect(after[anchor]).not.toContain('BEGIN:'); expect(after[anchor]).toContain('a'.repeat(30));
+    app.stdin.write('\u001b[D'); await pause(); expect(app.lastFrame()).toContain('横移 0 列');
+  });
+  it('keeps multiline commands and code as original logical lines in details', () => {
+    const lines = toolDetailLines({ id: 't1', kind: 'tool', timestamp: '2026-11-12T12:00:00Z', content: 'output', toolCall: { id: 't1', name: 'bash', arguments: { command: 'printf hello\nprintf world', cwd: 'D:/项目' } } });
+    expect(lines).toContain('printf hello'); expect(lines).toContain('printf world'); expect(lines.join('\n')).not.toContain('hello\\n');
+  });
+  it.each([[160,48],[120,36],[80,24],[60,18]])('keeps todo and footer visible within a %s x %s session frame', async (columns, rows) => {
+    const runtime = fakeRuntime({ restored: true, todos: Array.from({ length: 6 }, (_, index) => ({ text: `任务 ${index}`, status: 'pending' as const })), entries: [{ id: 'a1', kind: 'assistant', timestamp: '2026-11-12T12:00:00Z', content: '# 测试标题\n这是**重点**和 `code`\n\n- 第一项\n- 第二项' }] });
+    const app = render(<App runtime={runtime} config={{ version: 1, profiles: [] }} bash={{ available: true }} dimensions={{ columns: columns!, rows: rows! }} />); await pause();
+    const frame = stripAnsi(app.lastFrame() ?? ''); const lines = frame.split('\n');
+    expect(lines.length).toBeLessThanOrEqual(rows!); expect(Math.max(...lines.map(line => stringWidth(line)))).toBeLessThanOrEqual(columns!);
+    expect(frame).toContain('[ ] 任务 0'); expect(frame).toContain('每次询问'); expect(frame).toContain('描述你想完成的任务');
   });
   it('answers only a submitted user question and supports cancellation', async () => {
     const runtime = fakeRuntime({ status: 'answering', question: { id: 'q1', question: '选择测试方式', options: ['单元测试', '完整测试'] } });
