@@ -1,0 +1,5 @@
+{
+  "name": "elvion-harnees-win32-arm64", "version": "0.1.0", "description": "ELVION pinned PortableGit and Windows process supervisor",
+  "os": ["win32"], "cpu": ["arm64"], "license": "SEE LICENSE IN THIRD_PARTY.md",
+  "files": ["runtime", "bin", "THIRD_PARTY.md", "provenance.json"]
+}

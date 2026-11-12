@@ -1,0 +1,144 @@
+name: Release
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Exact version in package.json, without v prefix
+        type: string
+        required: true
+      source_url:
+        description: HTTPS tar.gz containing ALL PortableGit corresponding sources and sources-manifest.json
+        type: string
+        required: true
+      source_sha256:
+        description: SHA-256 of the complete corresponding-source tar.gz
+        type: string
+        required: true
+permissions:
+  contents: read
+concurrency:
+  group: release
+  cancel-in-progress: false
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Require green CI for this exact main commit
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: node scripts/release-gate.mjs "$RELEASE_VERSION"
+  platform:
+    needs: gate
+    name: PortableGit / ${{ matrix.arch }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: windows-latest
+            arch: x64
+          - runner: windows-11-arm
+            arch: arm64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          architecture: ${{ matrix.arch }}
+          cache: npm
+      - uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: ${{ matrix.arch }}
+      - run: npm ci --ignore-scripts
+      - run: npm run prepare:platform -- --arch=${{ matrix.arch }}
+      - run: npm run build
+      - run: npm run check
+      - run: npm run test:package
+      - name: Pack the complete initialized runtime
+        env:
+          TARGET_ARCH: ${{ matrix.arch }}
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force artifacts/platform | Out-Null
+          npm pack "./packages/platform-win32-$env:TARGET_ARCH" --ignore-scripts --pack-destination artifacts/platform
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Copy-Item "packages/platform-win32-$env:TARGET_ARCH/provenance.json" "artifacts/platform/provenance-$env:TARGET_ARCH.json"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: platform-${{ matrix.arch }}
+          path: artifacts/platform/*
+          if-no-files-found: error
+  publish:
+    needs: [gate, platform]
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    environment: npm-release
+    permissions:
+      contents: write
+      actions: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          registry-url: https://registry.npmjs.org
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: platform-*
+          path: artifacts/release
+          merge-multiple: true
+      - name: Restore platform provenance for source version checks
+        run: |
+          cp artifacts/release/provenance-x64.json packages/platform-win32-x64/provenance.json
+          cp artifacts/release/provenance-arm64.json packages/platform-win32-arm64/provenance.json
+      - name: Authenticate and verify complete corresponding sources
+        env:
+          SOURCE_URL: ${{ inputs.source_url }}
+          SOURCE_SHA256: ${{ inputs.source_sha256 }}
+        run: node scripts/verify-sources.mjs "$SOURCE_URL" "$SOURCE_SHA256"
+      - run: npm run build
+      - run: npm run check
+      - name: Recheck main and CI before publishing
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: node scripts/release-gate.mjs "$RELEASE_VERSION"
+      - name: Prepare immutable publication artifacts
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: node scripts/prepare-release.mjs "$RELEASE_VERSION"
+      - name: Publish platform packages, then CLI
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          npm publish "artifacts/release/elvion-harnees-win32-x64-$RELEASE_VERSION.tgz" --access public --provenance --ignore-scripts
+          npm publish "artifacts/release/elvion-harnees-win32-arm64-$RELEASE_VERSION.tgz" --access public --provenance --ignore-scripts
+          npm publish "artifacts/release/elvion-harnees-$RELEASE_VERSION.tgz" --access public --provenance --ignore-scripts
+      - name: Publish versioned GitHub Release and source materials
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: gh release create "v$RELEASE_VERSION" artifacts/release/* --target "$GITHUB_SHA" --title "Elvion CLI v$RELEASE_VERSION" --notes-file "release/release-$RELEASE_VERSION.md"

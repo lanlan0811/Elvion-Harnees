@@ -1,0 +1,1 @@
+{ "name": "@elvion-harnees/contracts", "version": "0.1.0", "private": true, "type": "module", "description": "Development workspace for shared contracts; runtime types are compiled into the CLI." }

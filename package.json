@@ -1,0 +1,49 @@
+{
+  "name": "elvion-harnees",
+  "version": "0.1.0",
+  "description": "ELVION — 本地单 Agent 命令行执行伙伴",
+  "type": "module",
+  "license": "MIT",
+  "engines": { "node": ">=24.0.0 <25 || >=26.0.0" },
+  "bin": { "elvion": "dist/cli/index.js" },
+  "files": ["dist", "assets/brand", "prompts", "LICENSE", "README.md", "THIRD_PARTY.md"],
+  "workspaces": ["packages/contracts"],
+  "scripts": {
+    "build": "tsc && node scripts/copy-assets.mjs",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "check": "npm run typecheck && npm run lint && npm run build && npm test",
+    "start": "node dist/cli/index.js",
+    "dev": "tsx cli/index.tsx",
+    "test:package": "node scripts/package-smoke.mjs",
+    "prepare:platform": "node scripts/prepare-platform.mjs"
+  },
+  "dependencies": {
+    "diff": "^8.0.2",
+    "fast-glob": "^3.3.3",
+    "ink": "8.0.0",
+    "react": "^19.3.0",
+    "string-width": "^8.1.0",
+    "strip-ansi": "^7.1.2",
+    "zod": "^4.0.0"
+  },
+  "optionalDependencies": {
+    "elvion-harnees-win32-x64": "file:packages/platform-win32-x64",
+    "elvion-harnees-win32-arm64": "file:packages/platform-win32-arm64"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.0.0",
+    "@types/diff": "^7.0.2",
+    "@types/node": "^24.0.0",
+    "@types/react": "^19.2.0",
+    "eslint": "^9.0.0",
+    "ink-testing-library": "^4.0.0",
+    "tsx": "^4.20.0",
+    "typescript": "^5.9.0",
+    "typescript-eslint": "^8.0.0",
+    "vitest": "^4.0.0"
+  },
+  "repository": { "type": "git", "url": "https://github.com/lanlan0811/Elvion-Harnees.git" }
+}

@@ -1,0 +1,20 @@
+{
+  "compilerOptions": {
+    "target": "ES2023",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "jsx": "react-jsx",
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "resolveJsonModule": true,
+    "outDir": "dist",
+    "rootDir": ".",
+    "declaration": true,
+    "sourceMap": true
+  },
+  "include": ["cli/**/*.ts", "cli/**/*.tsx", "core/**/*.ts", "runtime/**/*.ts", "providers/**/*.ts", "execution/**/*.ts", "tools/**/*.ts"],
+  "exclude": ["**/*.test.ts", "**/*.test.tsx", "node_modules", "dist"]
+}

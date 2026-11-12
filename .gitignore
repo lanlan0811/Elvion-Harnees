@@ -7,10 +7,14 @@ out/
 lib/
 *.tsbuildinfo
 
-# dist/ 是插件安装后直接运行的产物（安装时不会构建），因此必须提交进仓库。
+# CLI build artifacts are produced and checked in CI, never committed.
 dist/
-!dist/
-!dist/**
+packages/platform-*/runtime/
+packages/platform-*/launcher.exe
+packages/platform-*/bin/
+packages/platform-*/provenance.json
+*.tgz
+artifacts/
 
 # Test coverage
 coverage/
