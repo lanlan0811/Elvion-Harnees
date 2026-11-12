@@ -36,6 +36,8 @@ jobs:
       - run: npm run prepare:platform -- --arch=x64
         if: runner.os == 'Windows'
       - run: npm run build
+      - name: Require the actual Bash runtime before lifecycle tests
+        run: node --input-type=module -e "const {inspectBash}=await import('./dist/execution/bash.js');const result=await inspectBash();if(!result.available)throw Error(result.error);console.log('Bash runtime verified');"
       - run: npm run check
       - run: npm run test:package
       - run: npm audit --omit=dev --audit-level=high

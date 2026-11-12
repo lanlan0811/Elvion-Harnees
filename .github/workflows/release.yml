@@ -68,6 +68,8 @@ jobs:
       - run: npm ci --ignore-scripts
       - run: npm run prepare:platform -- --arch=${{ matrix.arch }}
       - run: npm run build
+      - name: Require bundled Bash before platform lifecycle tests
+        run: node --input-type=module -e "const {inspectBash}=await import('./dist/execution/bash.js');const result=await inspectBash();if(!result.available)throw Error(result.error);console.log('Bundled Bash runtime verified');"
       - run: npm run check
       - run: npm run test:package
       - name: Pack the complete initialized runtime
