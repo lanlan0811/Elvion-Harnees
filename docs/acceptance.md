@@ -1,6 +1,6 @@
 # Elvion CLI v0.1.0 验收记录
 
-记录日期：2026-11-12（Asia/Shanghai）。当前为开发验收，不表示 npm 已发布或远端 CI 已通过。
+记录日期：2026-11-12（Asia/Shanghai）。当前为开发验收，npm 尚未发布；远端 CI 证据见下表。
 
 ## 验收方式
 
@@ -17,7 +17,7 @@
 | 会话恢复、锁与崩溃恢复 | 已通过 | 独占与过期锁并发、完整记录损坏、尾部半条日志、工具结果未知不重放、resume重置权限 |
 | 打包安装 | 已通过 | npm run test:package：真实主包与Windows平台tarball经npm安装，ignore-scripts、隔离配置、中文/空格路径、版本/帮助/狐狸资源、实际执行内置Bash，移走平台包后必须报错且不回退；尚非公开registry安装 |
 | 生产依赖审计 | 已通过 | npm audit --omit=dev --audit-level=high：0 vulnerabilities |
-| 精确 main 的远端 CI | 未验证 | 推送后核对工作流 SHA，本地测试不能代替 |
+| 精确 main 的远端 CI | 已通过 | 代码提交 607e3fb88a1a52507822d0462c399923f7c4baaa；CI run 43203219276 全部六组成功：Windows x64、macOS Apple Silicon、macOS Intel × Node24/26；包含实际平台Bash、全量检查、真实安装冒烟和生产审计 |
 
 ## 人工与外部验收
 
@@ -47,6 +47,8 @@
 ## CI 与发布门禁
 
 ci.yml覆盖Windows x64、macOS Apple Silicon与Intel、Node24/26。Windows校验固定PortableGit、初始化并构建原生启动器；测试前先构建，再检查、安装冒烟和生产审计。
+
+上述远端证据对应已核对的代码 SHA。后续提交仍必须等待自身 CI 成功；文档记录不能替代 release-gate 对当前 main SHA 的实时查询。工作流：https://github.com/lanlan0811/Elvion-Harnees/actions/runs/43203219276 。
 
 release.yml只手动触发，要求main、准确版本、对应说明、完整源码HTTPS地址和SHA256。检查main当前SHA最近一次push CI成功，平台独立打包与检查后发布前再次检查。顺序为平台包、主包、GitHub Release。
 
