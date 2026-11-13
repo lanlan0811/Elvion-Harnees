@@ -82,6 +82,11 @@ describe('real runtime + provider HTTP + tools + persistence integration', () =>
       expect(environment.agent.getSnapshot().status).toBe('idle'); expect(approvals).toBe(1);
       expect(await readFile(join(environment.workspace, '结果.txt'), 'utf8')).toBe('真实工具执行完成\n');
       expect(environment.requests).toHaveLength(2);
+      const prompts = await Promise.all(['system.md', 'agent.md', 'tools.md'].map(file => readFile(new URL('../prompts/' + file, import.meta.url), 'utf8')));
+      for (const request of environment.requests) {
+        const system = protocol === 'anthropic' ? request.body.system : (protocol === 'openai-responses' ? request.body.input : request.body.messages).filter((message: { role?: string }) => message.role === (protocol === 'openai-responses' ? 'developer' : 'system')).map((message: { content: string }) => message.content).join('\n\n');
+        for (const prompt of prompts) expect(system).toContain(prompt.trim());
+      }
       expect(environment.requests[0]!.url).toBe(protocol === 'openai-responses' ? '/v1/responses' : protocol === 'openai-chat' ? '/v1/chat/completions' : '/v1/messages');
       const followup = JSON.stringify(environment.requests[1]!.body); expect(followup).toContain('write-1');
       if (protocol === 'openai-responses') { expect(environment.requests[0]!.body.store).toBe(false); expect(followup).toContain('function_call_output'); }

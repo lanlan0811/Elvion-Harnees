@@ -83,6 +83,7 @@ export async function main(args = process.argv.slice(2)): Promise<number> {
   const config: AppConfig = await loadConfig(); const bash = await inspectBash();
   const store = command === 'resume' || chosenId ? await SessionStore.resume(chosenId ?? args[1]) : await SessionStore.create(resolve(process.cwd()));
   const runtime = new AgentRuntime({ store, config });
+  try { await runtime.ready(); } catch (error) { await runtime.close().catch(() => undefined); throw error; }
   const instance = render(<App runtime={runtime} config={config} bash={bash} initialOverlay={command === 'config' ? 'profiles' : undefined} />, { alternateScreen: true, exitOnCtrlC: false, maxFps: 30, incrementalRendering: true });
   const stop = () => { void runtime.close().finally(() => instance.unmount()); };
   process.once('SIGTERM', stop); process.once('SIGHUP', stop);

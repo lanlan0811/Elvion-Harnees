@@ -1,5 +1,4 @@
 import { randomUUID, createHash } from 'node:crypto';
-import { readFile } from 'node:fs/promises';
 import { resolveApiKey } from '../core/config.js';
 import { errorMessage, sanitize } from '../core/security.js';
 import type { AppConfig, ModelProfile, PermissionMode, RuntimeSnapshot, ToolExecutor, ProviderAdapter, Message, TranscriptEntry, ToolCall, ApprovalRequest, UserQuestion } from '../core/types.js';
@@ -7,6 +6,7 @@ import { createProvider } from '../providers/index.js';
 import { createToolExecutor } from '../tools/index.js';
 import { SessionStore } from './session.js';
 import { compactMessages, contextBudget, estimateInput } from './context.js';
+import { loadSystemPrompt } from './prompts.js';
 export interface AgentOptions { store: SessionStore; config: AppConfig; executor?: ToolExecutor; providerFactory?: (profile: ModelProfile) => ProviderAdapter }
 function profileFingerprint(profile: ModelProfile): string { return createHash('sha256').update(JSON.stringify({ id: profile.id, protocol: profile.protocol, baseUrl: profile.baseUrl, model: profile.model })).digest('hex'); }
 export class AgentRuntime {
@@ -38,7 +38,7 @@ export class AgentRuntime {
       for (const entry of this.snapshot.entries) if (entry.kind === 'tool' && ['executing', 'approving', '执行中', '等待确认'].includes(entry.status || '')) entry.status = '结果未知';
       this.entry('system', '已恢复会话，权限已重置为每次询问；未完成操作不会自动重跑。');
     }
-    this.initialized = this.initialize(); this.rebudget();
+    this.initialized = this.initialize(); void this.initialized.catch(error => this.fail(error)); this.rebudget();
   }
   private replayDurableToolResults(): void {
     const lastState = this.store.events.findLastIndex(event => event.type === 'state');
@@ -71,19 +71,18 @@ export class AgentRuntime {
     return visit(value) as T;
   }
   private async initialize(): Promise<void> {
-    if (!this.messages.length) {
-      const system = await readFile(new URL('../prompts/system.md', import.meta.url), 'utf8');
-      this.messages = [{ role: 'system', content: system + '\n本地单 Agent，只有已提供的工具。Shell 只能 Bash。无跨会话记忆、无编排、无 plan mode。只在观察到成功工具结果后报告成功。不要要求使用禁用的桌面或浏览器工具。' }];
-    }
+    const system = await loadSystemPrompt();
+    this.messages = [{ role: 'system', content: system }, ...this.messages.filter(message => message.role !== 'system' || message.content.startsWith('本会话压缩摘要：'))];
     for (const call of this.store.unfinishedTools()) await this.store.append('tool-end', { id: call.id, status: '结果未知' });
-    await this.persist();
+    this.rebudget(); await this.persist(); this.emit();
   }
+  async ready(): Promise<void> { await this.initialized; }
   getSnapshot(): RuntimeSnapshot { return structuredClone(this.snapshot); }
   subscribe(listener: (s: RuntimeSnapshot) => void): () => void { this.listeners.add(listener); return () => this.listeners.delete(listener); }
   private emit(): void { const state = this.getSnapshot(); for (const listener of this.listeners) listener(state); }
   private entry(kind: TranscriptEntry['kind'], content: string, extra: Partial<TranscriptEntry> = {}): TranscriptEntry { const entry = { id: randomUUID(), kind, content: sanitize(content, this.secrets()), timestamp: new Date().toISOString(), ...extra }; this.snapshot.entries.push(entry); return entry; }
   private async persist(): Promise<void> { await this.store.append('state', this.clean({ messages: this.messages, entries: this.snapshot.entries, profileId: this.snapshot.profile?.id, profileFingerprint: this.snapshot.profile ? profileFingerprint(this.snapshot.profile) : undefined, todos: this.snapshot.todos })); }
-  private rebudget(): void { this.snapshot.estimated = true; if (this.snapshot.profile) this.snapshot.contextPercent = estimateInput(this.messages, this.executor.definitions) * this.calibration / this.snapshot.profile.contextWindow * 100; }
+  private rebudget(): void { this.snapshot.estimated = true; this.snapshot.contextPercent = this.snapshot.profile ? estimateInput(this.messages, this.executor.definitions) * this.calibration / this.snapshot.profile.contextWindow * 100 : 0; }
   private profile(): ModelProfile { const profile = this.snapshot.profile; if (!profile) throw new Error('请先通过 /provider 配置供应商和模型'); return profile; }
   updateConfig(config: AppConfig): void {
     const old = this.snapshot.profile; this.rememberSecrets(this.config); this.config = config; this.rememberSecrets(config);

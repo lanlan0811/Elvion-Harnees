@@ -268,6 +268,7 @@ export function App({ runtime, config: initialConfig, bash, dimensions, initialO
 
   if (tooSmall) return <Box flexDirection="column" width={Math.max(1, columns)} height={Math.max(1, rows)}><Text color={theme.warning}>窗口过小，请扩大至至少 60 列 × 18 行。</Text><Text color={theme.muted}>{truncate(`${statusLabels[snapshot.status]} | Ctrl+C ${isBusy ? '取消' : '退出'}`, Math.max(1, columns))}</Text></Box>;
   const commandHints = draft.text.startsWith('/') && !draft.text.includes('\n') ? commands.filter(command => command.startsWith(draft.text)).join('  ') : '';
+  const contextUsage = snapshot.contextPercent > 0 && snapshot.contextPercent < 0.1 ? '<0.1%' : snapshot.contextPercent === 0 ? '0%' : `${snapshot.contextPercent.toFixed(1)}%`;
   return <Box flexDirection="column" width={columns} height={rows} paddingX={2} backgroundColor={theme.background} overflow="hidden">
     <Box flexDirection="column" height={2} flexShrink={0}>
       <Text color={theme.text} bold>{truncate(`ELVION  会话 ${snapshot.sessionId.slice(0, 8)} | ${snapshot.title || '新会话'}${snapshot.restored ? ' [已恢复]' : ''}`, bodyWidth)}</Text>
@@ -285,7 +286,7 @@ export function App({ runtime, config: initialConfig, bash, dimensions, initialO
     </Box>
     <Text color={theme.border}>{'─'.repeat(bodyWidth)}</Text>
     <Box flexDirection="column" height={2} flexShrink={0}>
-      <Text color={snapshot.permission === 'full' || snapshot.contextPercent >= 75 ? theme.warning : theme.muted} wrap="truncate-end">{truncate(`${permissionLabels[snapshot.permission]} | 上下文 ${Math.round(snapshot.contextPercent)}%${snapshot.estimated ? '（估算）' : ''} | ${statusLabels[snapshot.status]} | ${snapshot.profile ? snapshot.profile.name + ' / ' + snapshot.profile.model : 'Provider 未配置'}`, bodyWidth)}</Text>
+      <Text color={snapshot.permission === 'full' || snapshot.contextPercent >= 75 ? theme.warning : theme.muted} wrap="truncate-end">{truncate(`${permissionLabels[snapshot.permission]} | 上下文 ${contextUsage}${snapshot.estimated ? '（估算）' : ''} | ${statusLabels[snapshot.status]} | ${snapshot.profile ? snapshot.profile.name + ' / ' + snapshot.profile.model : 'Provider 未配置'}`, bodyWidth)}</Text>
       <Text color={theme.muted} wrap="truncate-end">{truncate(snapshot.pendingProfile ? `待切换：${snapshot.pendingProfile.name} / ${snapshot.pendingProfile.model}，当前轮结束后生效` : scrollTop !== null && historyStart < maxScroll ? '有新内容，Ctrl+End 回到底部' : snapshot.compactPending ? '将在安全边界压缩上下文' : commandHints || 'Enter 发送 | Ctrl+J 换行 | PgUp/PgDn 历史 | F2 详情 | Ctrl+C 取消/退出', bodyWidth)}</Text>
     </Box>
   </Box>;

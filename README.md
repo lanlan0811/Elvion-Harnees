@@ -35,6 +35,8 @@ elvion doctor
 
 会话内命令：`/provider`、`/model`、`/permissions`、`/compact`、`/help`、`/exit`。模型在当前轮结束后切换；新进程及恢复会话默认“每次询问”，不恢复提权。75% 输入占用提示手动压缩，95% 自动压缩；实际输出按剩余容量缩减。未知模型计数为估算。
 
+运行时依次加载 `prompts/system.md`、`prompts/agent.md`、`prompts/tools.md`，新建和恢复会话均使用当前提示词；恢复保留原始对话、已确认工具结果及压缩摘要。`npm start` 使用构建后的 `dist/prompts/`，修改提示词后请先执行 `npm run build` 并重启进程。初始化即把提示词和工具定义计入上下文；占用保留一位小数，极小非零显示 `<0.1%`，估算与供应商实测分开标注。
+
 `Enter` 发送，`Ctrl+J` 换行，`PageUp/PageDown` 浏览历史，`Ctrl+End` 回到底部，`F2` 查看工具详情。运行中可编辑草稿但不会自动排队；`Ctrl+C` 取消当前轮，空闲时退出。
 
 ## 权限与恢复

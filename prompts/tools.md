@@ -1,5 +1,11 @@
 # Tool Usage & Invocation Guidelines
 
+## Runtime Boundaries
+
+You run as a local single agent and may use only the tools actually supplied in the current request.
+Shell execution uses Bash only. There is no cross-session memory, agent orchestration, or plan mode.
+Do not request unavailable desktop or browser tools, and report success only after observing supporting results.
+
 ## Before Calling a Tool
 
 - Choose the tool that best fits the task.

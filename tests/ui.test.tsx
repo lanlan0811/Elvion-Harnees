@@ -128,6 +128,24 @@ describe('profile form', () => {
 });
 
 describe('runtime interaction surfaces', () => {
+  it.each([[0, '0%'], [0.0001, '<0.1%'], [0.04, '<0.1%'], [0.1, '0.1%'], [0.48, '0.5%'], [42.26, '42.3%'], [74.9, '74.9%'], [75, '75.0%'], [94.9, '94.9%'], [95, '95.0%'], [100, '100.0%']] as const)('shows nonzero context occupancy honestly at %s percent', async (contextPercent, expected) => {
+    const runtime = fakeRuntime({ contextPercent, estimated: true, restored: true });
+    const app = render(<App runtime={runtime} config={{ version: 1, profiles: [] }} bash={{ available: true }} dimensions={{ columns: 60, rows: 18 }} />); await pause();
+    const frame = stripAnsi(app.lastFrame() ?? '');
+    expect(frame).toContain(`上下文 ${expected}（估算）`);
+    expect(frame.split('\n')).toHaveLength(18); expect(Math.max(...frame.split('\n').map(line => stringWidth(line)))).toBeLessThanOrEqual(60);
+  });
+  it('refreshes the footer from estimates to measured context without losing small nonzero values', async () => {
+    const runtime = fakeRuntime({ contextPercent: 0, estimated: true, restored: true });
+    let update: ((snapshot: RuntimeSnapshot) => void) | undefined;
+    runtime.subscribe = listener => { update = listener; return () => { update = undefined; }; };
+    const app = render(<App runtime={runtime} config={{ version: 1, profiles: [] }} bash={{ available: true }} dimensions={{ columns: 80, rows: 24 }} />); await pause();
+    expect(app.lastFrame()).toContain('上下文 0%（估算）');
+    update?.({ ...runtime.getSnapshot(), contextPercent: 0.04, estimated: true }); await pause();
+    expect(app.lastFrame()).toContain('上下文 <0.1%（估算）');
+    update?.({ ...runtime.getSnapshot(), contextPercent: 0.32, estimated: false }); await pause();
+    expect(app.lastFrame()).toContain('上下文 0.3%'); expect(app.lastFrame()).not.toContain('（估算）');
+  });
   it('defaults approval to rejection and never approves typed y', async () => {
     const runtime = fakeRuntime({ status: 'approving', approval: { id: 'approval1', tool: 'bash', title: 'npm test', details: '命令：npm test\n工作目录：D:/项目\n超时：60s' } });
     const app = render(<App runtime={runtime} config={{ version: 1, profiles: [] }} bash={{ available: true }} dimensions={{ columns: 100, rows: 34 }} />); await pause();
