@@ -2,7 +2,7 @@ export type Protocol = 'openai-responses' | 'openai-chat' | 'anthropic';
 export type PermissionMode = 'ask' | 'edit' | 'full';
 export interface ModelProfile {
   id: string; name: string; protocol: Protocol; baseUrl: string; model: string;
-  apiKey?: string; apiKeyEnv?: string; contextWindow: number; maxOutputTokens: number;
+  apiKey?: string; contextWindow: number; maxOutputTokens: number;
   outputParameter?: 'max_tokens' | 'max_completion_tokens';
 }
 export interface AppConfig { version: 1; profiles: ModelProfile[]; activeProfileId?: string }

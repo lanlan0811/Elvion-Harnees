@@ -3,15 +3,19 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 import { render, cleanup } from 'ink-testing-library';
 import stringWidth from 'string-width';
 import stripAnsi from 'strip-ansi';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { App, toolDetailLines, transcriptRows, type UIRuntime } from '../cli/app.js';
 import { Welcome, welcomeLayout, foxLarge, foxSmall } from '../cli/welcome.js';
-import { createProfileForm, profileFromForm } from '../cli/config-form.js';
+import { ConfigForm, createProfileForm, fieldKeys, formFields, profileFromForm } from '../cli/config-form.js';
 import { cursorPosition, deleteBackward, deleteForward, graphemes, insertText, lineBoundary, moveCursor, moveVertical, safeText, sliceColumns, wrapLines } from '../cli/editor.js';
 import { markdownRows } from '../cli/markdown.js';
-import { parseTokenCount } from '../core/config.js';
+import { loadConfig, parseTokenCount } from '../core/config.js';
 import type { RuntimeSnapshot } from '../core/types.js';
 
-afterEach(cleanup);
+const dirs: string[] = [];
+afterEach(async () => { cleanup(); vi.unstubAllEnvs(); await Promise.all(dirs.splice(0).map(dir => rm(dir, { recursive: true, force: true }))); });
 const pause = () => new Promise(resolve => setTimeout(resolve, 50));
 function fakeRuntime(overrides: Partial<RuntimeSnapshot> = {}): UIRuntime {
   const snapshot: RuntimeSnapshot = { sessionId: 'a1b2c3d4', title: '测试会话', cwd: 'D:/中文 项目', status: 'idle', permission: 'ask', entries: [], contextPercent: 42, estimated: true, todos: [], restored: false, compactPending: false, ...overrides };
@@ -79,14 +83,47 @@ describe('responsive welcome artwork', () => {
 describe('profile form', () => {
   it('requires per-model capacities and accepts custom models', () => {
     const empty = createProfileForm(); expect(empty.context).toBe(''); expect(empty.output).toBe('');
-    const model = profileFromForm({ ...empty, name: '私有服务', baseUrl: 'https://example.com/v1', apiKeyEnv: 'MY_KEY', model: 'custom-model', context: '512k', output: '256k' }, parseTokenCount);
-    expect(model.contextWindow).toBe(512000); expect(model.maxOutputTokens).toBe(256000); expect(model.apiKey).toBeUndefined();
+    const model = profileFromForm({ ...empty, name: '私有服务', baseUrl: 'https://example.com/v1', apiKey: '  local-test-key  ', model: 'custom-model', context: '512k', output: '256k' }, parseTokenCount);
+    expect(model.contextWindow).toBe(512000); expect(model.maxOutputTokens).toBe(256000); expect(model.apiKey).toBe('local-test-key'); expect(model).not.toHaveProperty('apiKeyEnv');
   });
   it('rejects insecure remote URLs and invalid capacities', () => {
-    const base = { ...createProfileForm(), name: 'custom', model: 'model', apiKeyEnv: 'MY_KEY', context: '1m', output: '384k' };
+    const base = { ...createProfileForm(), name: 'custom', model: 'model', apiKey: 'local-test-key', context: '1m', output: '384k' };
     expect(() => profileFromForm({ ...base, baseUrl: 'http://example.com' }, parseTokenCount)).toThrow('HTTPS');
     expect(() => profileFromForm({ ...base, output: '2m' }, parseTokenCount)).toThrow('小于');
     expect(() => profileFromForm({ ...base, context: '' }, parseTokenCount)).toThrow();
+  });
+  it('removes the environment field and keeps the local key masked', async () => {
+    expect(fieldKeys).toEqual(['name', 'protocol', 'baseUrl', 'apiKey', 'model', 'context', 'output', 'outputParameter']);
+    expect(formFields).toHaveLength(fieldKeys.length + 1);
+    const form = { ...createProfileForm(), apiKey: 'local-test-key' }; expect(form).not.toHaveProperty('apiKeyEnv');
+    const app = render(<ConfigForm form={form} focused={3} columns={100} height={30} saving={false} />); await pause();
+    expect(app.lastFrame()).not.toContain('环境变量'); expect(app.lastFrame()).not.toContain('local-test-key'); expect(app.lastFrame()).toContain('*'.repeat(14));
+  });
+  it.each(['', '   '])('requires a local API key: %j', apiKey => {
+    const form = { ...createProfileForm(), name: 'custom', model: 'model', apiKey, apiKeyEnv: 'ELVION_TEST_KEY', context: '1m', output: '384k' };
+    vi.stubEnv('ELVION_TEST_KEY', 'env-key'); expect(() => profileFromForm(form, parseTokenCount)).toThrow('请填写 API Key。');
+  });
+  it('navigates the shortened form, toggles parameters and saves a usable local key', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'elvion-form-')); dirs.push(home); vi.stubEnv('ELVION_HOME', home);
+    const runtime = fakeRuntime(); const saved = vi.fn();
+    const app = render(<App runtime={runtime} config={{ version: 1, profiles: [] }} bash={{ available: true }} dimensions={{ columns: 100, rows: 64 }} initialOverlay="profiles" onConfigSaved={saved} />); await pause();
+    const press = async (input: string) => { app.stdin.write(input); await pause(); };
+    await press('\r'); await press('\r');
+    await press('\u001b[Z'); expect(app.lastFrame()).toContain('> 保存配置'); await press('\t'); expect(app.lastFrame()).toContain('> 供应商名称');
+    await press('\u0015'); await press('测试供应商'); await press('\r'); await press('\u001b[C');
+    await press('\t'); await press('https://example.com/v1');
+    await press('\t'); await press('local-test-key'); expect(app.lastFrame()).not.toContain('local-test-key');
+    await press('\t'); expect(app.lastFrame()).toContain('> 模型名称'); await press('custom-model');
+    await press('\t'); await press('1m'); await press('\t'); await press('384k');
+    await press('\t'); expect(app.lastFrame()).toContain('> Chat 输出参数');
+    await press('\u001b[C'); expect(app.lastFrame()).not.toContain('max_completion_tokens'); expect(app.lastFrame()).toContain('max_tokens');
+    await press('\u001b[D'); expect(app.lastFrame()).toContain('max_completion_tokens'); await press('\u001b[C');
+    await press('\t'); expect(app.lastFrame()).toContain('> 保存配置'); await press('\r');
+    await vi.waitFor(() => expect(saved).toHaveBeenCalledOnce());
+    const config = await loadConfig(home); expect(config.profiles).toHaveLength(1);
+    expect(config.profiles[0]).toMatchObject({ name: '测试供应商', protocol: 'openai-chat', apiKey: 'local-test-key', model: 'custom-model', contextWindow: 1_000_000, maxOutputTokens: 384_000, outputParameter: 'max_tokens' });
+    expect(config.profiles[0]).not.toHaveProperty('apiKeyEnv'); expect(runtime.updateConfig).toHaveBeenCalledWith(config); expect(runtime.send).not.toHaveBeenCalled();
+    expect(app.lastFrame()).toContain('配置已保存'); expect(app.lastFrame()).not.toContain('local-test-key');
   });
 });
 
@@ -105,7 +142,7 @@ describe('runtime interaction surfaces', () => {
   });
   it('keeps the draft when a configured profile lacks credentials', async () => {
     const profile = { id: 'p1', name: '测试', protocol: 'openai-chat' as const, baseUrl: 'https://example.com/v1', model: 'model', contextWindow: 512000, maxOutputTokens: 256000, apiKeyEnv: 'ELVION_TEST_UNSET_KEY' };
-    delete process.env.ELVION_TEST_UNSET_KEY;
+    vi.stubEnv('ELVION_TEST_UNSET_KEY', 'legacy-env-key');
     const runtime = fakeRuntime({ profile, restored: true });
     const app = render(<App runtime={runtime} config={{ version: 1, profiles: [profile] }} bash={{ available: true }} dimensions={{ columns: 100, rows: 34 }} />); await pause();
     app.stdin.write('保留这条任务'); await pause(); app.stdin.write('\r'); await pause();

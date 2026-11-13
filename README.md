@@ -31,7 +31,7 @@ elvion resume <session-id>
 elvion doctor
 ```
 
-首次使用通过 `/provider` 配置协议、URL、密钥来源、模型、上下文容量与最大输出；支持 OpenAI Responses、Chat Completions 及 Anthropic Messages。容量支持 `1m`、`512k`、`384k`，每个模型独立填写。不要把示例容量当作所有供应商的额度。环境变量密钥优先于本地密钥。配置保存在 `~/.elvion/config.json`；本地明文密钥请妥善管理，推荐环境变量。可用 `ELVION_HOME` 指定独立数据目录。
+首次使用通过 `/provider` 配置协议、URL、API Key、模型、上下文容量与最大输出；支持 OpenAI Responses、Chat Completions 及 Anthropic Messages。容量支持 `1m`、`512k`、`384k`，每个模型独立填写。不要把示例容量当作所有供应商的额度。API Key 直接填写，界面掩码显示，保存在 `~/.elvion/config.json`，本地明文密钥请妥善管理。不再读取 API Key 环境变量名；旧配置若仅设置了环境变量名，请通过 `/provider` 补填 API Key。可用 `ELVION_HOME` 指定独立数据目录。
 
 会话内命令：`/provider`、`/model`、`/permissions`、`/compact`、`/help`、`/exit`。模型在当前轮结束后切换；新进程及恢复会话默认“每次询问”，不恢复提权。75% 输入占用提示手动压缩，95% 自动压缩；实际输出按剩余容量缩减。未知模型计数为估算。
 

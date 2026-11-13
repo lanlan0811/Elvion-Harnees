@@ -186,8 +186,8 @@ export function App({ runtime, config: initialConfig, bash, dimensions, initialO
         if (key.tab) setFormFocus(value => (value + (key.shift ? formFields.length - 1 : 1)) % formFields.length);
         else if (key.ctrl && input === 'u') editFormText('', false, true);
         else if (key.leftArrow || key.rightArrow) {
-          if (formFocus === 1) setForm(value => ({ ...value, protocol: protocolOptions[(protocolOptions.indexOf(value.protocol) + (key.rightArrow ? 1 : 2)) % 3]! }));
-          if (formFocus === 8) setForm(value => ({ ...value, outputParameter: value.outputParameter === 'max_tokens' ? 'max_completion_tokens' : 'max_tokens' }));
+          if (fieldKeys[formFocus] === 'protocol') setForm(value => ({ ...value, protocol: protocolOptions[(protocolOptions.indexOf(value.protocol) + (key.rightArrow ? 1 : 2)) % 3]! }));
+          if (fieldKeys[formFocus] === 'outputParameter') setForm(value => ({ ...value, outputParameter: value.outputParameter === 'max_tokens' ? 'max_completion_tokens' : 'max_tokens' }));
         }
         else if (key.return) { if (formFocus === formFields.length - 1) void saveForm(); else setFormFocus(value => Math.min(formFields.length - 1, value + 1)); }
         else if (key.backspace || key.delete) editFormText('', true);

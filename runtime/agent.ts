@@ -58,7 +58,7 @@ export class AgentRuntime {
       card.metadata = this.clean({ ...data.result.metadata, durableRecovery: true });
     }
   }
-  private rememberSecrets(config: AppConfig): void { for (const p of config.profiles) for (const secret of [p.apiKey, p.apiKeyEnv ? process.env[p.apiKeyEnv] : undefined]) if (secret) this.knownSecrets.add(secret); }
+  private rememberSecrets(config: AppConfig): void { for (const p of config.profiles) if (p.apiKey) this.knownSecrets.add(p.apiKey); }
   private secrets(): string[] { this.rememberSecrets(this.config); return [...this.knownSecrets]; }
   private clean<T>(value: T): T {
     const secrets = this.secrets();

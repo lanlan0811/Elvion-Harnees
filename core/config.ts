@@ -8,7 +8,7 @@ export const profileSchema = z.object({
   id: z.string().min(1).max(128), name: z.string().min(1).max(100),
   protocol: z.enum(['openai-responses', 'openai-chat', 'anthropic']),
   baseUrl: z.string().url().refine(value => { const url = new URL(value); return !url.username && !url.password && !url.search && !url.hash && (url.protocol === 'https:' || (url.protocol === 'http:' && ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname))); }, '地址必须使用 HTTPS 且不包含凭据、查询或片段；仅本机测试允许 HTTP'),
-  model: z.string().min(1).max(256), apiKey: z.string().optional(), apiKeyEnv: z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/).optional(),
+  model: z.string().min(1).max(256), apiKey: z.string().optional(),
   contextWindow: z.number().int().min(1024).max(100_000_000), maxOutputTokens: z.number().int().positive().max(100_000_000),
   outputParameter: z.enum(['max_tokens', 'max_completion_tokens']).optional(),
 }).refine(p => p.maxOutputTokens < p.contextWindow, '最大输出必须小于上下文容量');
@@ -35,6 +35,5 @@ export async function saveConfig(config: AppConfig, home = getAppHome()): Promis
   await rename(temp, target); if (process.platform !== 'win32') await chmod(target, 0o600);
 }
 export function resolveApiKey(profile: ModelProfile): string {
-  const env = profile.apiKeyEnv ? process.env[profile.apiKeyEnv] : undefined;
-  const key = env || profile.apiKey; if (!key) throw new Error('模型 ' + profile.name + ' 未配置 API Key，请使用 /provider'); return key;
+  const key = profile.apiKey; if (!key?.trim()) throw new Error('模型 ' + profile.name + ' 未配置 API Key，请使用 /provider'); return key;
 }
