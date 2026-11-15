@@ -25,7 +25,7 @@
 | --- | --- |
 | `pnpm lint` | ESLint 通过，无通过修改工作流或屏蔽有效断言掩盖失败 |
 | `pnpm typecheck` | 各 Workspace 包 `tsc --noEmit` 及 `tsc -p tests/tsconfig.json` 通过 |
-| `pnpm test` | 15 个测试文件，193 项通过、1 项按平台条件跳过。当前 Windows 已执行专用 Console Ctrl+C 测试；跳过项是仅在非 Windows 平台运行的 SIGINT 场景，不是失败被跳过 |
+| `pnpm test` | 15 个测试文件，198 项通过、1 项按平台条件跳过。当前 Windows 已执行专用 Console Ctrl+C 测试；跳过项是仅在非 Windows 平台运行的 SIGINT 场景，不是失败被跳过 |
 | `pnpm build` | 构建 CLI、内部模块及 Session Worker，并包含原品牌资源，通过 |
 | `pnpm smoke:package` | 独立安装目录重复执行均通过：实际 pack/install、版本/help、doctor 未配置状态、会话 Worker、供应商列表、全部品牌资源字节及无未发布 Workspace 依赖 |
 
@@ -55,7 +55,7 @@
 | #验证、#核实 | 读取实际文件、Diff、SQLite 内容、真实子进程退出码和验证证据；不是只断言函数被调用 |
 | #严谨、#归族 | Schema、越界路径/junction、精确匹配/覆盖冲突、Git 用户改动保护、协议畸形分片、审批 ID、拒绝和取消、敏感流跨分片脱敏 |
 | #时间维 | 模型 pending 流取消/超时、真实进程树退出、审批中取消、会话重启、同工作区互斥、SQLite 多 Worker 竞争与并发关闭 |
-| #假绿 | 保留失败断言；独立验证失败不完成；无检查/需要审批不默认成功；193 pass 与 1 平台条件 skip 如实区分；真实端点与本地夹具证据分开 |
+| #假绿 | 保留失败断言；独立验证失败不完成；无检查/需要审批不默认成功；198 pass 与 1 平台条件 skip 如实区分；真实端点与本地夹具证据分开 |
 
 ## 剩余验收与交付状态
 
@@ -72,3 +72,7 @@ Phase 1 未引入 Multi-Agent、长期记忆、MCP/Web Research、OS 级 Sandbox
 运行 `43697152323` 对应 `a9d29ed170fa545fca0524d5151df0d81b803167`。Ubuntu 的四项失败来自三类问题：npm 测试夹具未转义的内联 JS 在 sh 下退出 2；保存配置失败后的清理 ENOTDIR 覆盖了类型化错误；Ink 在 CI 中只在卸载时写最后一帧，而测试提前断言。已改为真实 .mjs 测试文件（保留并加强 exit 1/0 断言）、保留原始持久化异常 cause，以及先卸载并等待最终帧再检查真实输出。没有删除测试或降低门槛。修复后再次完整执行 `pnpm check`：15 个文件、193 pass、1 平台条件 skip，Lint/Typecheck/Build 均退出 0；后续 CI 结果待远端取得后更新。
 
 第二轮运行 `43697811331` 对应 `b0e9878`：其余测试通过，仍有一个 Ink 输出断言失败，Windows 再次被 fail-fast 取消。已用 `CI=true` 在 Windows 稳定复现，确认 Ink 6.8 的 CI 策略只在 unmount 写最后一帧；单纯增加等待无效。修正测试生命周期，保留全部输入、回调、版本、中文和 raw mode 恢复断言，不修改 CI 环境或关闭检查。
+
+第三轮运行 `43698322700` 对应 `5ec0cbb`：Ubuntu 的 frozen install、完整检查及安装包冒烟全部成功；Windows 暴露临时目录短路径/大小写与 realpath 的身份差异，四个恢复场景被误拒绝，另一个真实回滚测试的精确注入路径未命中。正在修复执行边界的真实路径比较并规范化测试夹具；不放宽跨工作区或供应商匹配约束。
+
+路径修复后完整本地 `pnpm check` 通过：15 个文件、198 pass、1 平台条件 skip；Lint、Typecheck、Build 均退出 0。新增真实双向 junction、Windows 大小写恢复、不同目录和不同 provider 拒绝；回滚注入增加准确触发一次的断言。最终远端运行待本次提交 Push 后核实。

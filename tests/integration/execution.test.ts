@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { randomUUID } from 'node:crypto';
@@ -170,6 +170,50 @@ describe('real local execution with scripted model events', () => {
     expect(runtime.requests).toHaveLength(0);
     expect((await repository.get(state.id))?.permissions).toBe('ask');
     expect(await readFile(join(directory, 'previous.txt'), 'utf8')).toBe('side effect already happened');
+  });
+  it.each(['saved', 'requested'])('resumes the same directory through a real %s workspace alias while retaining its saved identity', async aliased => {
+    const target = join(directory, 'actual-workspace');
+    const alias = join(directory, 'workspace-alias');
+    await mkdir(target);
+    await symlink(target, alias, process.platform === 'win32' ? 'junction' : 'dir');
+    const canonical = await realpath(target);
+    expect(await realpath(alias)).toBe(canonical);
+    const savedWorkspace = aliased === 'saved' ? alias : canonical;
+    const requestedWorkspace = aliased === 'requested' ? alias : canonical;
+    const now = new Date().toISOString();
+    const state: SessionSnapshot = { schemaVersion: 1, id: randomUUID(), workspace: savedWorkspace, providerId: 'scripted-local-fixture', permissions: 'ask', state: 'running', task: 'previous action', messages: [], lastSequence: 0, createdAt: now, updatedAt: now };
+    await repository.save(state);
+    await writeFile(join(canonical, 'previous.txt'), 'existing side effect');
+    const runtime = new ScriptedModel([]);
+    const events = await collect(executeTask({ ...options(runtime), workspace: requestedWorkspace, session: state }));
+    expect(events.map(event => event.type)).toEqual(['execution.needs_review']);
+    expect(runtime.requests).toHaveLength(0);
+    expect(await repository.get(state.id)).toMatchObject({ workspace: savedWorkspace, permissions: 'ask', state: 'needs_review', lastSequence: 1 });
+    expect(await readFile(join(canonical, 'previous.txt'), 'utf8')).toBe('existing side effect');
+  });
+  it.runIf(process.platform === 'win32')('resumes a saved workspace whose path uses different casing', async () => {
+    const canonical = await realpath(directory);
+    const now = new Date().toISOString();
+    const state: SessionSnapshot = { schemaVersion: 1, id: randomUUID(), workspace: canonical.toUpperCase(), providerId: 'scripted-local-fixture', permissions: 'ask', state: 'running', task: 'previous action', messages: [], lastSequence: 0, createdAt: now, updatedAt: now };
+    await repository.save(state);
+    const runtime = new ScriptedModel([]);
+    const events = await collect(executeTask({ ...options(runtime), workspace: canonical, session: state }));
+    expect(events.map(event => event.type)).toEqual(['execution.needs_review']);
+    expect(runtime.requests).toHaveLength(0);
+    expect(await repository.get(state.id)).toMatchObject({ workspace: state.workspace, state: 'needs_review' });
+  });
+  it.each(['workspace', 'provider'])('rejects a resumed session with a different %s before acquiring a lock', async changed => {
+    const otherWorkspace = join(directory, 'different-workspace');
+    await mkdir(otherWorkspace);
+    const now = new Date().toISOString();
+    const state: SessionSnapshot = { schemaVersion: 1, id: randomUUID(), workspace: directory, providerId: 'scripted-local-fixture', permissions: 'ask', state: 'running', task: 'previous action', messages: [], lastSequence: 0, createdAt: now, updatedAt: now };
+    await repository.save(state);
+    const runtime = new ScriptedModel([]);
+    await expect(collect(executeTask({ ...options(runtime), workspace: changed === 'workspace' ? otherWorkspace : directory, providerId: changed === 'provider' ? 'different-provider' : state.providerId, session: state }))).rejects.toMatchObject({ code: 'configuration_error' });
+    expect(runtime.requests).toHaveLength(0);
+    expect(await repository.get(state.id)).toMatchObject({ workspace: state.workspace, providerId: state.providerId, state: 'running', lastSequence: 0 });
+    expect(await repository.events(state.id)).toEqual([]);
+    await expect(readdir(join(directory, 'locks'))).rejects.toMatchObject({ code: 'ENOENT' });
   });
   it('rejects a second execution while the same workspace is owned', async () => {
     const first = executeTask(options(new ScriptedModel([delivery()]))) [Symbol.asyncIterator]();

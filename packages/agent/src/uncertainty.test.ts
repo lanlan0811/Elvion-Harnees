@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { BudgetTracker, type JsonValue, type ModelEvent, type ModelRuntime, type ToolCall } from '@elvion/kernel';
@@ -8,7 +8,7 @@ import * as files from '../../tool/src/files.js';
 import { runAgent, type AgentEvent } from './index.js';
 
 let workspace: string;
-beforeEach(async () => { workspace = await mkdtemp(join(tmpdir(), 'elvion-uncertainty-')); });
+beforeEach(async () => { workspace = await realpath(await mkdtemp(join(tmpdir(), 'elvion-uncertainty-'))); });
 afterEach(async () => { vi.restoreAllMocks(); await rm(workspace, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); });
 const signal = (): AbortSignal => new AbortController().signal;
 function model(calls: ToolCall[]): { runtime: ModelRuntime; requests: () => number } {
@@ -25,25 +25,29 @@ function agent(runtime: ModelRuntime, tools = new ToolRuntime()): AsyncIterable<
 function patchCall(): ToolCall {
   return { id: 'patch', name: 'apply_patch', arguments: { patch: '--- a/a.txt\n+++ b/a.txt\n@@ -1 +1 @@\n-before-a\n+after-a\n--- a/b.txt\n+++ b/b.txt\n@@ -1 +1 @@\n-before-b\n+after-b\n' } };
 }
-function injectRollbackConflict(): void {
+function injectRollbackConflict(): () => number {
   const write = files.atomicWrite;
+  let failuresInjected = 0;
   vi.spyOn(files, 'atomicWrite').mockImplementation(async (path, content, expected) => {
     if (path === join(workspace, 'b.txt')) {
+      failuresInjected++;
       await writeFile(join(workspace, 'a.txt'), 'concurrent-user-change\n');
       throw new Error('Injected second-file write failure after a concurrent change');
     }
     return write(path, content, expected);
   });
+  return () => failuresInjected;
 }
 describe('uncertain tool side effects', () => {
   it('marks a real partial patch with rollback failure for review and stops the agent before any more tools or model turns', async () => {
     await writeFile(join(workspace, 'a.txt'), 'before-a\n'); await writeFile(join(workspace, 'b.txt'), 'before-b\n');
-    injectRollbackConflict();
+    const failuresInjected = injectRollbackConflict();
     const source = model([patchCall(), { id: 'must-not-run', name: 'write_file', arguments: { path: 'later.txt', content: 'unsafe' } }]);
     const observed: AgentEvent[] = [];
     await expect((async () => { for await (const event of agent(source.runtime)) observed.push(event); })()).rejects.toMatchObject({
       code: 'conflict', retryable: false, details: { requiresReview: true, toolCallId: 'patch', toolName: 'apply_patch', rollbackFailures: [join(workspace, 'a.txt')] },
     });
+    expect(failuresInjected()).toBe(1);
     expect(source.requests()).toBe(1);
     const finished = observed.find(event => event.type === 'tool.finished')?.payload as Record<string, JsonValue>;
     expect(finished).toMatchObject({ status: 'error', error: { code: 'conflict', details: { requiresReview: true, rollbackFailures: [join(workspace, 'a.txt')] } } });

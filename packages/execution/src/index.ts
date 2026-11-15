@@ -52,7 +52,13 @@ export async function* executeTask(options: ExecutionOptions): AsyncIterable<Eve
   const snapshot: SessionSnapshot = options.session ? SessionSnapshotSchema.parse(options.session) : { schemaVersion: 1, id: randomUUID(), workspace, providerId: options.providerId, permissions: options.permissions ?? 'auto-edit', state: 'created', task: options.task, messages: [], lastSequence: 0, createdAt: now, updatedAt: now };
   if (options.permissions) snapshot.permissions = options.permissions;
   SessionSnapshotSchema.parse(snapshot);
-  if (options.session && (options.session.workspace !== workspace || options.session.providerId !== options.providerId)) throw new ElvionError('configuration_error', 'Resume must use the saved workspace and provider');
+  if (options.session) {
+    let savedWorkspace: string;
+    try { savedWorkspace = await realpath(snapshot.workspace); }
+    catch (cause) { throw new ElvionError('configuration_error', 'Saved workspace is unavailable', { cause }); }
+    // Resolve directory aliases for comparison; retain the saved identity for persistence.
+    if (savedWorkspace !== workspace || snapshot.providerId !== options.providerId) throw new ElvionError('configuration_error', 'Resume must use the saved workspace and provider');
+  }
   const sequence = new EventSequencer({ sessionId: snapshot.id, executionId: randomUUID(), nextSequence: snapshot.lastSequence + 1 });
   const redact = createSensitiveRedactor();
   const cancellation = new CancellationScope({ ...(options.signal ? { signal: options.signal } : {}), timeoutMs: budget.limits.maxDurationMs });
