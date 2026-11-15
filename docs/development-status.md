@@ -69,4 +69,6 @@ Phase 1 未引入 Multi-Agent、长期记忆、MCP/Web Research、OS 级 Sandbox
 
 ## 首轮远端 CI 复核与修复
 
-运行 `43697152323` 对应 `a9d29ed170fa545fca0524d5151df0d81b803167`。Ubuntu 的四项失败来自三类问题：npm 测试夹具未转义的内联 JS 在 sh 下退出 2；保存配置失败后的清理 ENOTDIR 覆盖了类型化错误；Ink 测试在真实渲染前断言。已改为真实 .mjs 测试文件（保留并加强 exit 1/0 断言）、保留原始持久化异常 cause，以及等待实际渲染。没有删除测试或降低门槛。修复后再次完整执行 `pnpm check`：15 个文件、193 pass、1 平台条件 skip，Lint/Typecheck/Build 均退出 0；后续 CI 结果待远端取得后更新。
+运行 `43697152323` 对应 `a9d29ed170fa545fca0524d5151df0d81b803167`。Ubuntu 的四项失败来自三类问题：npm 测试夹具未转义的内联 JS 在 sh 下退出 2；保存配置失败后的清理 ENOTDIR 覆盖了类型化错误；Ink 在 CI 中只在卸载时写最后一帧，而测试提前断言。已改为真实 .mjs 测试文件（保留并加强 exit 1/0 断言）、保留原始持久化异常 cause，以及先卸载并等待最终帧再检查真实输出。没有删除测试或降低门槛。修复后再次完整执行 `pnpm check`：15 个文件、193 pass、1 平台条件 skip，Lint/Typecheck/Build 均退出 0；后续 CI 结果待远端取得后更新。
+
+第二轮运行 `43697811331` 对应 `b0e9878`：其余测试通过，仍有一个 Ink 输出断言失败，Windows 再次被 fail-fast 取消。已用 `CI=true` 在 Windows 稳定复现，确认 Ink 6.8 的 CI 策略只在 unmount 写最后一帧；单纯增加等待无效。修正测试生命周期，保留全部输入、回调、版本、中文和 raw mode 恢复断言，不修改 CI 环境或关闭检查。

@@ -127,10 +127,12 @@ describe('live Ink input and approvals', () => {
       await new Promise(resolve => setImmediate(resolve));
       t.input.write('\r');
       await vi.waitFor(() => expect(t.onCommand).toHaveBeenCalledExactlyOnceWith('help', ''));
-      await vi.waitFor(() => {
-        expect(t.output()).toContain('ELVION CLI v0.1.0');
-        expect(t.output()).toContain('未配置模型');
-      });
+      // Ink suppresses live frames in CI and writes the final frame on unmount.
+      // Exercise input while mounted, then inspect the actual stdout in both modes.
+      t.app.unmount();
+      await t.app.waitUntilExit();
+      expect(t.output()).toContain('ELVION CLI v0.1.0');
+      expect(t.output()).toContain('未配置模型');
     } finally { t.app.unmount(); t.app.cleanup(); }
     expect(t.raw).toHaveBeenLastCalledWith(false);
   });
