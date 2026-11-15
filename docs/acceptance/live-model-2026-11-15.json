@@ -1,0 +1,100 @@
+{
+  "schemaVersion": 1,
+  "date": "2026-11-15T08:48:02.970Z",
+  "scope": "One user-configured OpenAI-compatible endpoint; not acceptance for every live provider",
+  "protocol": "openai-chat",
+  "probe": {
+    "done": true,
+    "text": "ELVION_READY",
+    "usage": {
+      "inputTokens": 65,
+      "outputTokens": 24,
+      "totalTokens": 89
+    }
+  },
+  "exitCode": 0,
+  "terminalEvent": "execution.completed",
+  "eventCount": 2492,
+  "toolCalls": 51,
+  "tasksCompleted": 4,
+  "verification": [
+    {
+      "sequence": 674,
+      "passed": true,
+      "checks": [
+        {
+          "name": "test",
+          "command": [
+            "npm",
+            "run",
+            "test"
+          ],
+          "exitCode": 0,
+          "status": "passed"
+        }
+      ]
+    },
+    {
+      "sequence": 1165,
+      "passed": true,
+      "checks": [
+        {
+          "name": "test",
+          "command": [
+            "npm",
+            "run",
+            "test"
+          ],
+          "exitCode": 0,
+          "status": "passed"
+        }
+      ]
+    },
+    {
+      "sequence": 1790,
+      "passed": true,
+      "checks": [
+        {
+          "name": "test",
+          "command": [
+            "npm",
+            "run",
+            "test"
+          ],
+          "exitCode": 0,
+          "status": "passed"
+        }
+      ]
+    },
+    {
+      "sequence": 2490,
+      "passed": true,
+      "checks": [
+        {
+          "name": "test",
+          "command": [
+            "npm",
+            "run",
+            "test"
+          ],
+          "exitCode": 0,
+          "status": "passed"
+        }
+      ]
+    }
+  ],
+  "fixture": {
+    "before": "export function multiply(a,b){return a+b;}\n",
+    "after": "export function multiply(a,b){return a*b;}\n",
+    "readme": "# Fixture\n\n## Usage\n\n```js\nimport { multiply } from './index.mjs';\n\nmultiply(6, 7); // 42\n```\n\n`multiply(a, b)` returns the product of two numbers, e.g. `multiply(6, 7)`\nyields `42`. It is implemented in `math.mjs` and re-exported from `index.mjs`.\n\n## Test\n\n```sh\nnpm test\n```\n",
+    "testAssertions": "import {test} from 'node:test';import assert from 'node:assert/strict';import {multiply} from './index.mjs';test('multiply',()=>{assert.equal(multiply(6,7),42);assert.equal(multiply(-3,2),-6);assert.equal(multiply(0,5),0);});\n",
+    "testsAndPackageScriptsUnchanged": true,
+    "noExtraFixtureFiles": true
+  },
+  "limitations": [
+    "This run preceded the final verification-baseline and uncertain-rollback guards; final local regression checks are recorded separately.",
+    "The isolated REPL host had damaged PATHEXT and missing ComSpec; the second run restored normal Windows command lookup for its process only.",
+    "Initial Git Bash POSIX absolute paths were rejected by native Windows file tools; the model recovered using relative paths.",
+    "No credential or endpoint URL is stored in this evidence."
+  ]
+}

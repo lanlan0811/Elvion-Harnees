@@ -1,0 +1,16 @@
+{
+  "name": "@elvion/model",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.ts",
+  "exports": "./src/index.ts",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@elvion/kernel": "workspace:*",
+    "zod": "^4.1.12"
+  }
+}

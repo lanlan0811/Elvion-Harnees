@@ -1,0 +1,19 @@
+{
+  "name": "@elvion/cli",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": { "./ui": "./src/ui/index.ts" },
+  "scripts": { "typecheck": "tsc --noEmit" },
+  "dependencies": {
+    "@elvion/model": "workspace:*",
+    "@elvion/session": "workspace:*",
+    "@elvion/tool": "workspace:*",
+    "@elvion/execution": "workspace:*",
+    "@elvion/kernel": "workspace:*",
+    "ink": "^6.6.0",
+    "react": "^19.2.0",
+    "string-width": "^8.1.0"
+  },
+  "devDependencies": { "@types/react": "^19.2.0" }
+}
