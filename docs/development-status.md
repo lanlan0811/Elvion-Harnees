@@ -6,7 +6,7 @@
 
 在 `ec90c4a` 之后再次逐项对照正式计划，补齐三项实际要求：真实 TypeScript 类型错误修复的独立编译证据；验证命令超时停止后续检查、模型修复及恢复重放；CLI/TUI 新执行的 `--verification-timeout` 配置，以及运行失败后真实更新的 Runtime/存储健康状态。没有扩大至 Phase 2 工具或自定义脚本插件。
 
-最新完整 `pnpm check` 已实际 exit 0：**22 个文件、296 pass、1 平台条件 skip**，19:04:26 开始，144.40 秒；Lint、Workspace/测试类型检查、所有测试和 Build 均通过。原有 21 文件/284 pass 记录属于上一轮，不是当前最新测试数量。本轮冻结构建的独立安装 `pnpm smoke:package` 也已 exit 0：5 次编码请求、15 次真实工具调用、引擎验证 1→0、外部项目测试 0、SQLite/NDJSON 一致、两次恢复无重放。本轮新提交精确 SHA CI 尚待推送后核实，下面 `ca86ca5` 的成功记录仅证明上一轮提交。具体真实 `TS2322`、编译/运行时 `2/1→0/0`、超时 `124`、HTTP 401 和 SQLite 故障回归见 [专项验收](acceptance/typed-verification-2026-11-15.md)。其余真实供应商与正式 Windows Terminal/IME/完整 PTY 仍按用户决定保留未验收。
+最新完整 `pnpm check` 已实际 exit 0：**22 个文件、296 pass、1 平台条件 skip**，19:04:26 开始，144.40 秒；Lint、Workspace/测试类型检查、所有测试和 Build 均通过。原有 21 文件/284 pass 记录属于上一轮，不是当前最新测试数量。本轮冻结构建的独立安装 `pnpm smoke:package` 也已 exit 0：5 次编码请求、15 次真实工具调用、引擎验证 1→0、外部项目测试 0、SQLite/NDJSON 一致、两次恢复无重放。本轮代码已以中文提交 `dcf473c754618fd97cf573f8cfd1cd0baea1773c` 推送至 `origin main`，其精确 CI 运行 `43707523799` 已 completed/success：Windows 与 Ubuntu 的 frozen install、完整 Check 和安装产物编码验收均通过，见 [本轮 CI 证据](acceptance/ci-typed-verification-2026-11-15.json)。下面 `ca86ca5` 的成功记录仅证明上一轮提交。具体真实 `TS2322`、编译/运行时 `2/1→0/0`、超时 `124`、HTTP 401 和 SQLite 故障回归见 [专项验收](acceptance/typed-verification-2026-11-15.md)。其余真实供应商与正式 Windows Terminal/IME/完整 PTY 仍按用户决定保留未验收。
 
 ## 上一轮验收结论
 

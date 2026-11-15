@@ -14,7 +14,7 @@
 - 核心超时新增回归先红 3 项，修复后绿 3 项；包含既有正常修复及安全报告恢复的相关定向回归 9 项通过。
 - 界面/配置及真实 HTTP、存储场景的相关定向回归 7 项通过；CLI 类型检查和相关 ESLint 通过。
 - 两项构建后 CLI E2E 实际通过，耗时 54.21 秒；测试服务是本地 HTTP 夹具，不是付费真实模型端点。
-- 完整 `pnpm check` 实际 exit 0：22 个文件、296 pass、1 平台条件 skip；19:04:26 开始，144.40 秒。Lint、包及测试类型检查、Unit/Integration/E2E 和 Build 全通过。独立安装 `pnpm smoke:package` 随后实际 exit 0：生成 bin、完整资源、5 次编码/15 次真实工具、检查 1→0、外部测试 0、SQLite 事件一致及两次恢复无重放。最终精确 SHA CI 待推送后实测。
+- 完整 `pnpm check` 实际 exit 0：22 个文件、296 pass、1 平台条件 skip；19:04:26 开始，144.40 秒。Lint、包及测试类型检查、Unit/Integration/E2E 和 Build 全通过。独立安装 `pnpm smoke:package` 随后实际 exit 0：生成 bin、完整资源、5 次编码/15 次真实工具、检查 1→0、外部测试 0、SQLite 事件一致及两次恢复无重放。代码提交 `dcf473c754618fd97cf573f8cfd1cd0baea1773c` 的精确 CI `43707523799` 已 completed/success，Windows 与 Ubuntu 的完整 Check 与安装验收均通过，见 [CI 证据](ci-typed-verification-2026-11-15.json)。
 
 ## 保留门槛
 
