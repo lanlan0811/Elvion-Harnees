@@ -2,20 +2,20 @@
 
 更新日期：2026-11-15（Asia/Shanghai）。需求来源：本地《Elvion CLI-TUI 与 Phase 1 引擎开发计划》及 AGENTS.md。目标为需求、项目分析、任务规划、工具调用、跨文件修改、独立验证、有限恢复、会话保存和交付报告的单 Agent 闭环。
 
-本记录区分源码实现、本地客观验收与完整里程碑门槛。源码已形成可运行实现；仍有真实供应商、正式终端视觉及远端 CI 门槛待验收，不能将 Phase 1 记为全部完成。
+本记录区分源码实现、本地客观验收与完整里程碑门槛。源码已形成可运行实现；仍有其余真实供应商和正式终端视觉门槛待验收，不能将 Phase 1 记为全部完成。
 
 ## 里程碑状态
 
 | 里程碑 | 已实现范围 | 已取得验收证据 | 尚未通过的完整门槛 |
 | --- | --- | --- | --- |
-| M0：工程与契约 | pnpm Workspace、Node.js 24/ESM、严格 TypeScript、Kernel 事件/错误/取消/预算契约、模块包、质量脚本及 CI 配置 | `pnpm check` 中 Lint、全部包及测试代码类型检查、测试、构建均退出 0 | Windows/Ubuntu 远端 CI 已触发，首轮 Linux 失败正在修复；实现完成、本地工程门槛通过 |
+| M0：工程与契约 | pnpm Workspace、Node.js 24/ESM、严格 TypeScript、Kernel 事件/错误/取消/预算契约、模块包、质量脚本及 CI 配置 | `pnpm check` 中 Lint、全部包及测试代码类型检查、测试、构建均退出 0 | Windows/Ubuntu 最终代码 CI 全部通过；实现与工程门槛通过 |
 | M1：品牌 TUI | React/Ink 字符界面、原始大小狐狸及字标、四档断点、颜色降级、中文多行输入、流消息、审批、滚动、Diff/状态/报告显示 | 原品牌文本保真；160×42、144×36、116×28、80×24、窄屏和反复 resize 的字符网格测试；实际 Ink 输入流测试覆盖 Enter、Ctrl+J、中文、Esc 拒绝、单次审批、取消及 raw mode 恢复 | 本机未检测到 Windows Terminal；Cascadia Mono/TrueColor 正式环境截图及人工视觉对照未验收。流模拟输入不等同于真实终端 IME、粘贴和 PTY 全场景验收 |
-| M2：首个真实闭环 | OpenAI Chat 适配、独立 Agent Loop、Context/Prompt、Tool Runtime、读取/搜索及审批 | 第二次真实 OpenAI-compatible 运行取得 `execution.completed` / exit 0；完成 4 个任务、27 个 Agent Turn、51 次工具调用，4 次引擎独立 `npm run test` 均 exit 0；实际修复 `math` 并更新 README，测试断言和 package scripts 未改 | 该真实运行早于最终验证基线冻结及不确定回滚保护补丁；最终代码须随后完成本地回归及精确 SHA 的 CI。此证据仅覆盖一个真实端点，不代表全部供应商验收 |
-| M3：完整工具与权限 | `bash`、`read_file`、`write_file`、`edit_file`、`grep`、`glob`、`git`、`diff`、`apply_patch`、`todo`；ask/auto-edit/full-access 三模式 | 真实临时文件系统、中文路径/CRLF、精确匹配、覆盖/hash 冲突、补丁全目标预校验、真实 Git Diff/受控暂存提交、真实 Git Bash、拒绝/取消、越界与 junction、输出限制/脱敏、真实子进程树超时及取消测试通过 | 本地自动化门槛通过；其跨平台行为仍须远端矩阵核实。权限属于受控执行，不是 OS 沙箱 |
+| M2：首个真实闭环 | OpenAI Chat 适配、独立 Agent Loop、Context/Prompt、Tool Runtime、读取/搜索及审批 | 第二次真实 OpenAI-compatible 运行取得 `execution.completed` / exit 0；完成 4 个任务、27 个 Agent Turn、51 次工具调用，4 次引擎独立 `npm run test` 均 exit 0；实际修复 `math` 并更新 README，测试断言和 package scripts 未改 | 该真实运行早于最终验证基线冻结及不确定回滚保护补丁；最终代码另经本地完整回归与精确 SHA 的 Windows/Ubuntu CI 通过。此证据仅覆盖一个真实端点，不代表全部供应商验收 |
+| M3：完整工具与权限 | `bash`、`read_file`、`write_file`、`edit_file`、`grep`、`glob`、`git`、`diff`、`apply_patch`、`todo`；ask/auto-edit/full-access 三模式 | 真实临时文件系统、中文路径/CRLF、精确匹配、覆盖/hash 冲突、补丁全目标预校验、真实 Git Diff/受控暂存提交、真实 Git Bash、拒绝/取消、越界与 junction、输出限制/脱敏、真实子进程树超时及取消测试通过 | 本地自动化与 Windows/Ubuntu 远端矩阵通过。权限属于受控执行，不是 OS 沙箱 |
 | M4：全部模型接入 | `openai-chat`、`openai-responses`、`anthropic-messages`、`ollama-chat` 四独立协议；Qwen 使用兼容配置；自定义供应商按协议配置；配置增改/切换/探针 | 四协议均经本地 HTTP 服务检验实际分片 UTF-8/JSON、文本流、多工具与后续结果、终止、断流、错误、取消、超时及 Usage 缺失；配置只存环境变量引用，拒绝明文凭据；一个真实 OpenAI-compatible 端点连通通过 | 未完成所有真实 OpenAI 双协议、Anthropic、Qwen、Ollama 和自定义供应商端点的逐链路验收。本地 HTTP 夹具通过不能代替上述真实供应商验收 |
 | M5：会话与任务执行 | Worker SQLite Repository、版本化事件/快照、模型规划与 Task DAG、串行执行、依赖门槛、同工作区互斥、会话恢复 | 真 SQLite 文件及 Worker 重启；序号/事务/双写冲突、初始化锁竞争、并发关闭、权限保存恢复；两节点规划执行及逐节点验证；未知副作用转 `needs_review`，稳定会话不重放旧操作 | 本地自动化门槛通过；崩溃未知副作用仍需用户核实，不会自动宣称已恢复成功。CLI `resume` 仅恢复状态/报告，不调用模型或重放工具 |
-| M6：验证与有限恢复 | 从真实 package scripts 发现验证项、验证经统一工具权限入口、实际命令/退出码/证据报告、有限重试/修复、Turn/工具/时间预算 | 本地夹具覆盖真实检查先 exit 1、修复后 exit 0；第二次真实模型闭环的 4 次引擎独立 `npm run test` 均 exit 0，原测试及 package scripts 保持不变；无检查不能假完成；验证工具计入预算；审批、拒绝、取消和超时不自动重试 | 最终验证基线冻结及不确定回滚保护补丁的本地回归/CI 须另行记录；真实运行证据不覆盖补丁后的最终代码或全部真实供应商 |
-| M7：集成与分发 | 非交互 CLI、NDJSON、固定退出码、会话/供应商命令、包资源/Worker、安装包脚本、CI 矩阵和手动 Release 门禁 | 实际构建产物 CLI 子进程端到端覆盖跨文件修改、验证失败修复、恢复、不交互审批 exit 3、真实 HTTP 超时 exit 124；Windows 隐藏 Console helper 实际 Ctrl+C 返回 130；安装包冒烟完整执行两次通过 | 首轮远端 CI 暴露的跨平台问题正在修复，最终 SHA 待重新核实；Windows Terminal 截图和完整 PTY 交互未验收。未创建正式 Release 或发布 Tag |
+| M6：验证与有限恢复 | 从真实 package scripts 发现验证项、验证经统一工具权限入口、实际命令/退出码/证据报告、有限重试/修复、Turn/工具/时间预算 | 本地夹具覆盖真实检查先 exit 1、修复后 exit 0；第二次真实模型闭环的 4 次引擎独立 `npm run test` 均 exit 0，原测试及 package scripts 保持不变；无检查不能假完成；验证工具计入预算；审批、拒绝、取消和超时不自动重试 | 最终保护补丁的本地回归和远端 CI 已通过并另行记录；真实运行证据不覆盖补丁后的最终代码或全部真实供应商 |
+| M7：集成与分发 | 非交互 CLI、NDJSON、固定退出码、会话/供应商命令、包资源/Worker、安装包脚本、CI 矩阵和手动 Release 门禁 | 实际构建产物 CLI 子进程端到端覆盖跨文件修改、验证失败修复、恢复、不交互审批 exit 3、真实 HTTP 超时 exit 124；Windows 隐藏 Console helper 实际 Ctrl+C 返回 130；安装包冒烟完整执行两次通过 | 最终代码 SHA 的 Windows/Ubuntu CI 已核实通过；Windows Terminal 截图和完整 PTY 交互未验收。未创建正式 Release 或发布 Tag |
 
 ## 已执行的工程命令
 
@@ -59,20 +59,24 @@
 
 ## 剩余验收与交付状态
 
-- 一个真实 OpenAI-compatible 端点的完整闭环已取得证据；最终两项保护补丁后的本地完整回归通过，CI 待核实，全部真实供应商逐协议验收仍未完成。
+- 一个真实 OpenAI-compatible 端点的完整闭环已取得证据；最终代码的本地完整回归与 Windows/Ubuntu CI 均通过，全部真实供应商逐协议验收仍未完成。
 - Windows Terminal 正式 160×42 及断点实际截图、人工视觉对照、真实 IME/PTY 完整交互证据待验收。本机未检测到 Windows Terminal，现有字符网格与 Ink 测试不能替代该门槛。
-- CI 配置已覆盖 `windows-latest` 和 `ubuntu-latest` 的 frozen install、`pnpm check`、安装包冒烟；已推送并读取精确 SHA 的首轮运行 `43697152323`：Ubuntu 失败、Windows 因矩阵 fail-fast 被取消；不能声称 CI 全绿。失败原因和修复见下文。
-- 已完成首个中文 Commit `a9d29ed` 并 Push `origin main`；首轮 CI 的修复需在完整本地检查后追加提交，再核实最终 SHA 的全部 Jobs。
+- CI 配置已覆盖 `windows-latest` 和 `ubuntu-latest` 的 frozen install、`pnpm check`、安装包冒烟；最终代码运行 `43699015123` 双平台全部成功；早期失败及修复历史保留于下文。
+- 实现及修复已用中文 Commit 推送至 `origin main`；最终代码提交 `0888342` 已核实双平台全部 Jobs 成功。
 - 已准备手动 Release 工作流与版本/发布说明检查；未获得正式发布指令，因此未发布 Release、未推送发布 Tag。
 
 Phase 1 未引入 Multi-Agent、长期记忆、MCP/Web Research、OS 级 Sandbox、Git Worktree 或并行工作区等后续阶段功能。文件和 Shell 安全依赖实际权限检查、路径边界及当前 OS 用户权限；不宣称绝对安全。
 
 ## 首轮远端 CI 复核与修复
 
-运行 `43697152323` 对应 `a9d29ed170fa545fca0524d5151df0d81b803167`。Ubuntu 的四项失败来自三类问题：npm 测试夹具未转义的内联 JS 在 sh 下退出 2；保存配置失败后的清理 ENOTDIR 覆盖了类型化错误；Ink 在 CI 中只在卸载时写最后一帧，而测试提前断言。已改为真实 .mjs 测试文件（保留并加强 exit 1/0 断言）、保留原始持久化异常 cause，以及先卸载并等待最终帧再检查真实输出。没有删除测试或降低门槛。修复后再次完整执行 `pnpm check`：15 个文件、193 pass、1 平台条件 skip，Lint/Typecheck/Build 均退出 0；后续 CI 结果待远端取得后更新。
+运行 `43697152323` 对应 `a9d29ed170fa545fca0524d5151df0d81b803167`。Ubuntu 的四项失败来自三类问题：npm 测试夹具未转义的内联 JS 在 sh 下退出 2；保存配置失败后的清理 ENOTDIR 覆盖了类型化错误；Ink 在 CI 中只在卸载时写最后一帧，而测试提前断言。已改为真实 .mjs 测试文件（保留并加强 exit 1/0 断言）、保留原始持久化异常 cause，以及先卸载并等待最终帧再检查真实输出。没有删除测试或降低门槛。修复后再次完整执行 `pnpm check`：15 个文件、193 pass、1 平台条件 skip，Lint/Typecheck/Build 均退出 0；后续 CI 结果见最终代码 CI 结果。
 
 第二轮运行 `43697811331` 对应 `b0e9878`：其余测试通过，仍有一个 Ink 输出断言失败，Windows 再次被 fail-fast 取消。已用 `CI=true` 在 Windows 稳定复现，确认 Ink 6.8 的 CI 策略只在 unmount 写最后一帧；单纯增加等待无效。修正测试生命周期，保留全部输入、回调、版本、中文和 raw mode 恢复断言，不修改 CI 环境或关闭检查。
 
-第三轮运行 `43698322700` 对应 `5ec0cbb`：Ubuntu 的 frozen install、完整检查及安装包冒烟全部成功；Windows 暴露临时目录短路径/大小写与 realpath 的身份差异，四个恢复场景被误拒绝，另一个真实回滚测试的精确注入路径未命中。正在修复执行边界的真实路径比较并规范化测试夹具；不放宽跨工作区或供应商匹配约束。
+第三轮运行 `43698322700` 对应 `5ec0cbb`：Ubuntu 的 frozen install、完整检查及安装包冒烟全部成功；Windows 暴露临时目录短路径/大小写与 realpath 的身份差异，四个恢复场景被误拒绝，另一个真实回滚测试的精确注入路径未命中。已修复执行边界的真实路径比较并规范化测试夹具；不放宽跨工作区或供应商匹配约束。
 
-路径修复后完整本地 `pnpm check` 通过：15 个文件、198 pass、1 平台条件 skip；Lint、Typecheck、Build 均退出 0。新增真实双向 junction、Windows 大小写恢复、不同目录和不同 provider 拒绝；回滚注入增加准确触发一次的断言。最终远端运行待本次提交 Push 后核实。
+路径修复后完整本地 `pnpm check` 通过：15 个文件、198 pass、1 平台条件 skip；Lint、Typecheck、Build 均退出 0。新增真实双向 junction、Windows 大小写恢复、不同目录和不同 provider 拒绝；回滚注入增加准确触发一次的断言。对应最终远端运行 `43699015123` 已核实成功。
+
+## 最终代码 CI 结果
+
+精确代码提交 `0888342133be4f378e597dab5e7a21ce42bd96d0` 的运行 `43699015123` 已 completed / success。`quality (ubuntu-latest)` 与 `quality (windows-latest)` 均完成 frozen install、完整 `pnpm check` 和 `pnpm smoke:package`，全部成功。脱敏结构化结果保存于 `acceptance/ci-2026-11-15.json`。前述失败记录保留为排查历史，不代表当前代码 CI 状态。正式 Windows Terminal 视觉/IME 与其余真实供应商逐协议验收仍未完成；未发布 Release 或 Tag。
