@@ -52,8 +52,11 @@ export async function saveProviderConfigs(filePath: string, configs: readonly Pr
     await writeFile(temporaryPath, JSON.stringify(store, null, 2) + '\n', { encoding: 'utf8', mode: 0o600, flag: 'wx' });
     await rename(temporaryPath, filePath);
   } catch (error) {
+    try {
+      await rm(temporaryPath, { force: true });
+    } catch {
+      // Cleanup is best effort; retain the persistence failure and its original cause.
+    }
     throw new ElvionError('configuration_error', 'Cannot save provider configuration', { cause: error });
-  } finally {
-    await rm(temporaryPath, { force: true });
   }
 }

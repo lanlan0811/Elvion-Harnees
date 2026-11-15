@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -28,6 +28,23 @@ describe('provider configuration', () => {
     expect(ProviderConfigSchema.safeParse({ ...config, baseUrl: 'https://example.invalid?key=private' }).success).toBe(false);
     expect(ProviderConfigSchema.safeParse({ ...config, baseUrl: 'file:///tmp/model' }).success).toBe(false);
     expect(ProviderConfigSchema.safeParse({ ...config, apiKeyEnv: 'secret-value with spaces' }).success).toBe(false);
+  });
+
+  it('preserves the configuration error and original filesystem cause when the parent is a file', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'elvion-model-'));
+    directories.push(directory);
+    const parent = join(directory, 'not-a-directory');
+    await writeFile(parent, 'existing user data');
+    const original = await mkdir(parent, { recursive: true }).catch((error: unknown) => error);
+    expect(original).toBeInstanceOf(Error);
+    const failure: unknown = await saveProviderConfigs(join(parent, 'providers.json'), [config]).catch((error: unknown) => error);
+    expect(failure).toMatchObject({ code: 'configuration_error', message: 'Cannot save provider configuration' });
+    expect(failure).toHaveProperty('cause');
+    const cause = (failure as Error).cause;
+    expect(cause).toBeInstanceOf(Error);
+    expect(cause).toMatchObject({ code: (original as NodeJS.ErrnoException).code, syscall: (original as NodeJS.ErrnoException).syscall });
+    expect(await readFile(parent, 'utf8')).toBe('existing user data');
+    expect(await readdir(directory)).toEqual(['not-a-directory']);
   });
 
   it('rejects corrupt or future schemas and duplicate IDs without overwriting data', async () => {

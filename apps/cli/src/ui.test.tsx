@@ -127,8 +127,10 @@ describe('live Ink input and approvals', () => {
       await new Promise(resolve => setImmediate(resolve));
       t.input.write('\r');
       await vi.waitFor(() => expect(t.onCommand).toHaveBeenCalledExactlyOnceWith('help', ''));
-      expect(t.output()).toContain('ELVION CLI v0.1.0');
-      expect(t.output()).toContain('未配置模型');
+      await vi.waitFor(() => {
+        expect(t.output()).toContain('ELVION CLI v0.1.0');
+        expect(t.output()).toContain('未配置模型');
+      });
     } finally { t.app.unmount(); t.app.cleanup(); }
     expect(t.raw).toHaveBeenLastCalledWith(false);
   });

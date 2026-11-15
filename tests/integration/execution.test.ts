@@ -197,11 +197,13 @@ describe('real local execution with scripted model events', () => {
     expect(events.find(event => event.type === 'verification.finished')?.payload).toMatchObject({ passed: false, checks: [{ status: 'not_run' }] });
   });
   it.each(['delete', 'replace'])('requires review when a failed test script is weakened by %s', async change => {
-    const manifest = { private: true, scripts: { test: 'node -e process.exit(1)', build: 'node -e process.exit(0)' } };
+    await writeFile(join(directory, 'failure.mjs'), 'process.exitCode = 1;');
+    await writeFile(join(directory, 'success.mjs'), 'process.exitCode = 0;');
+    const manifest = { private: true, scripts: { test: 'node failure.mjs', build: 'node success.mjs' } };
     await writeFile(join(directory, 'package.json'), JSON.stringify(manifest));
     const altered = change === 'delete'
       ? { private: true, scripts: { build: manifest.scripts.build } }
-      : { private: true, scripts: { ...manifest.scripts, test: 'node -e process.exit(0)' } };
+      : { private: true, scripts: { ...manifest.scripts, test: 'node success.mjs' } };
     const runtime = new ScriptedModel([
       delivery('Ready for objective verification'),
       calls(tool('write_file', { path: 'package.json', content: JSON.stringify(altered), overwrite: true })),
@@ -209,7 +211,7 @@ describe('real local execution with scripted model events', () => {
     ]);
     const events = await collect(executeTask({ ...options(runtime), permissions: 'full-access' }));
     expect(events.filter(event => event.type === 'execution.repair')).toHaveLength(1);
-    expect(events.find(event => event.type === 'verification.finished')?.payload).toMatchObject({ passed: false, checks: expect.arrayContaining([{ name: 'test', command: ['npm', 'run', 'test'], exitCode: 1, status: 'failed', evidence: expect.any(String), failureReason: expect.any(String) }]) });
+    expect(events.find(event => event.type === 'verification.finished')?.payload).toMatchObject({ passed: false, checks: expect.arrayContaining([{ name: 'test', command: ['npm', 'run', 'test'], exitCode: 1, status: 'failed', evidence: expect.any(String), failureReason: expect.any(String) }, { name: 'build', command: ['npm', 'run', 'build'], exitCode: 0, status: 'passed', evidence: expect.any(String) }]) });
     expect(events.at(-1)?.type).toBe('execution.needs_review');
     expect(events.at(-1)?.payload).toMatchObject({ error: { code: 'verification_failed', details: { requiresReview: true, changedScripts: ['test'] } } });
     expect(events.some(event => event.type === 'execution.completed')).toBe(false);
@@ -249,7 +251,8 @@ describe('real local execution with scripted model events', () => {
     expect(await readdir(join(directory, 'locks'))).toEqual([]);
   });
   it('requires approval for auto-edit verification shells and returns instead of hanging', async () => {
-    await writeFile(join(directory, 'package.json'), JSON.stringify({ scripts: { test: 'node -e process.exit(0)' } }));
+    await writeFile(join(directory, 'success.mjs'), 'process.exitCode = 0;');
+    await writeFile(join(directory, 'package.json'), JSON.stringify({ scripts: { test: 'node success.mjs' } }));
     const events = await collect(executeTask(options(new ScriptedModel([delivery()]))));
     expect(events.at(-1)?.type).toBe('execution.approval_required');
     const persisted = await repository.events(events[0]!.sessionId);
@@ -257,7 +260,8 @@ describe('real local execution with scripted model events', () => {
     expect(events.at(-1)?.payload).toMatchObject({ budget: { toolCalls: 3 } });
   });
   it('counts verification tools in the same hard tool-call budget', async () => {
-    await writeFile(join(directory, 'package.json'), JSON.stringify({ scripts: { test: 'node -e process.exit(0)' } }));
+    await writeFile(join(directory, 'success.mjs'), 'process.exitCode = 0;');
+    await writeFile(join(directory, 'package.json'), JSON.stringify({ scripts: { test: 'node success.mjs' } }));
     const events = await collect(executeTask({ ...options(new ScriptedModel([delivery()])), permissions: 'full-access', budget: { maxToolCalls: 1 } }));
     expect(events.at(-1)?.type).toBe('execution.failed');
     expect(events.at(-1)?.payload).toMatchObject({ error: { code: 'budget_exceeded' }, budget: { toolCalls: 1 } });
