@@ -23,8 +23,17 @@ port.on('message', (raw: unknown) => {
         if (Number(storedSequence ?? 0) !== (previous?.lastSequence ?? 0)) throw new Error('Stored event history and snapshot are inconsistent');
         const events = validateEventSequence(request.events, { sessionId: request.snapshot.id, previousSequence: previous?.lastSequence ?? 0 });
         if (request.snapshot.lastSequence !== (events.at(-1)?.sequence ?? previous?.lastSequence ?? 0)) throw new Error('Snapshot sequence does not match events');
-        if (previous && (previous.workspace !== request.snapshot.workspace || previous.createdAt !== request.snapshot.createdAt)) throw new Error('Immutable session identity changed');
+        if (previous && (previous.workspace !== request.snapshot.workspace || previous.createdAt !== request.snapshot.createdAt || previous.providerId !== request.snapshot.providerId || previous.task !== request.snapshot.task)) throw new Error('Immutable session identity changed');
+        if (previous && previous.permissions !== request.snapshot.permissions) {
+          const authorized = events.some(event => { const payload = event.payload; return event.type === 'session.permissions_changed' && payload !== null && typeof payload === 'object' && !Array.isArray(payload) && payload['source'] === 'user' && payload['previous'] === previous.permissions && payload['permissions'] === request.snapshot.permissions; });
+          if (!authorized) throw new Error('Permission changes require an explicit user audit event');
+        }
         if (previous && request.snapshot.updatedAt < previous.updatedAt) throw new Error('Session update time moved backwards');
+        if (previous?.checkpoint) {
+          const before = previous.checkpoint; const after = request.snapshot.checkpoint;
+          if (!after || before.model !== after.model || JSON.stringify(before.budget.limits) !== JSON.stringify(after.budget.limits)) throw new Error('Execution checkpoint identity changed');
+          for (const counter of ['turns', 'toolCalls', 'retries', 'repairs', 'elapsedMs'] as const) if (after.budget.usage[counter] < before.budget.usage[counter]) throw new Error('Execution budget moved backwards');
+        }
         for (const event of events) db.prepare('INSERT INTO events VALUES(?,?,?)').run(event.sessionId, event.sequence, JSON.stringify(event));
         db.prepare('INSERT INTO sessions VALUES(?,?,?) ON CONFLICT(id) DO UPDATE SET updated=excluded.updated,snapshot=excluded.snapshot').run(request.snapshot.id, request.snapshot.updatedAt, JSON.stringify(request.snapshot));
         db.exec('COMMIT');

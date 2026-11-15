@@ -12,6 +12,12 @@ export const BudgetLimitsSchema = z.strictObject({
 });
 export type BudgetLimits = z.infer<typeof BudgetLimitsSchema>;
 export const DEFAULT_BUDGET_LIMITS: Readonly<BudgetLimits> = Object.freeze(BudgetLimitsSchema.parse({}));
+export const BudgetUsageSchema = z.strictObject({
+  turns: z.number().int().nonnegative(), toolCalls: z.number().int().nonnegative(),
+  retries: z.number().int().nonnegative(), repairs: z.number().int().nonnegative(),
+  elapsedMs: z.number().finite().nonnegative(),
+});
+export type BudgetUsage = z.infer<typeof BudgetUsageSchema>;
 
 export interface BudgetSnapshot {
   turns: number;
@@ -26,15 +32,20 @@ export class BudgetTracker {
   readonly limits: Readonly<BudgetLimits>;
   readonly #now: () => number;
   readonly #startedAt: number;
+  readonly #restoredElapsedMs: number;
   #turns = 0;
   #toolCalls = 0;
   #retries = 0;
   #repairs = 0;
 
-  constructor(limits: Partial<BudgetLimits> = {}, options: { now?: () => number } = {}) {
+  constructor(limits: Partial<BudgetLimits> = {}, options: { now?: () => number; restore?: BudgetUsage } = {}) {
     this.limits = Object.freeze(BudgetLimitsSchema.parse(limits));
     this.#now = options.now ?? (() => performance.now());
     this.#startedAt = this.#now();
+    const restored = options.restore ? BudgetUsageSchema.parse(options.restore) : { turns: 0, toolCalls: 0, retries: 0, repairs: 0, elapsedMs: 0 };
+    if (restored.turns > this.limits.maxTurns || restored.toolCalls > this.limits.maxToolCalls || restored.retries > this.limits.maxRetries || restored.repairs > this.limits.maxRepairs) throw new ElvionError('validation_error', 'Saved budget usage exceeds its limits');
+    this.#turns = restored.turns; this.#toolCalls = restored.toolCalls; this.#retries = restored.retries; this.#repairs = restored.repairs;
+    this.#restoredElapsedMs = restored.elapsedMs;
   }
 
   assertTimeRemaining(): void {
@@ -76,8 +87,12 @@ export class BudgetTracker {
     };
   }
 
+  usage(): BudgetUsage {
+    return { turns: this.#turns, toolCalls: this.#toolCalls, retries: this.#retries, repairs: this.#repairs, elapsedMs: this.#elapsed() };
+  }
+
   #elapsed(): number {
-    return Math.max(0, this.#now() - this.#startedAt);
+    return this.#restoredElapsedMs + Math.max(0, this.#now() - this.#startedAt);
   }
 
   #consume(resource: string, used: number, maximum: number): void {

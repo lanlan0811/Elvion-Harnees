@@ -45,13 +45,15 @@ node dist/cli.js resume <会话ID> --json
 
 执行先通过独立无工具模型调用建立严格校验的任务 DAG，然后串行完成可验证增量。每个任务的真实项目检查通过后才解锁依赖；验证失败最多修复两轮。默认 50 个模型 Turn、100 次工具调用、30 分钟，Shell 默认 120 秒。当前客观验证发现 Node `package.json` 中的 Lint、Typecheck、Test、Integration、E2E、Build 等脚本；没有可执行检查时会失败并说明未验收。自然语言验收文字本身不构成自动证明。
 
-会话保存事件、消息、权限和任务状态。CLI `resume` 恢复并报告已保存状态，不自动重放旧任务；TUI `/resume <id>` 后可以提交新指令。崩溃时未确认的工具副作用进入 `needs_review`，需检查文件、Git 和进程后创建新任务。工作区锁防止并发执行；遗留锁必须先核查，不能自动删除。
+会话保存事件、消息、权限、任务图和稳定检查点。CLI `resume` 与 TUI `/resume <id>` 继续原任务，保留原模型、验证脚本基线和累计预算，不重新规划或重放已完成操作；已完成会话只恢复交付报告。完整工具批次、已持久化的验证结果及任务之间可安全继续；未确认的请求、工具副作用或不完整批次进入 `needs_review`。失败、取消和超时终态不会自动重启，新的任务使用 `/new`。旧版活动会话没有检查点时仍需人工核实。工作区锁防止并发执行；真实进程崩溃留下的锁必须先检查进程、文件和 Git 状态，再显式处理，不能自动删除。
+
+上下文超预算时，通过独立无工具模型调用压缩完整历史交互，保留原目标、验收条件、关键决策、已完成证据及剩余工作。摘要作为不可信历史数据而非系统指令；压缩消耗同一 Turn/时间预算，格式错误、断流或预算不足会明确失败，不能静默丢弃决策。
 
 JSON 模式 stdout 为结构化 JSON/NDJSON，诊断写 stderr。退出码：成功 0，执行失败 1，参数/配置错误 2，待审批 3，超时 124，用户取消 130。Usage 缺失显示未知。
 
 ## TUI
 
-直接加载 `assets/brand` 原始狐狸和字标文本。支持大/小狐狸双栏、字标与窄屏布局，动态 resize、TrueColor 与 `NO_COLOR`。Enter 发送，Ctrl+J 换行，PgUp/PgDn 滚动；活动任务 Ctrl+C 取消，空闲 Ctrl+C 退出。审批仅 Y 批准当前调用，N/Esc 拒绝。`/provider /model /permissions /sessions /resume /new /help` 提供配置与会话入口。
+直接加载 `assets/brand` 原始狐狸和字标文本。支持大/小狐狸双栏、字标与窄屏布局，动态 resize、TrueColor 与 `NO_COLOR`。任务进度、逐轮 Usage、Diff 和独立检查报告由真实结构化事件呈现，恢复时重建保存对话。Enter 发送，Ctrl+J 换行，PgUp/PgDn 滚动；活动任务 Ctrl+C 取消，空闲 Ctrl+C 退出。审批仅 Y 批准当前调用，N/Esc 拒绝。`/provider /model /permissions /sessions /resume /new /help` 提供配置与会话入口。
 
 正式视觉基准为 Windows Terminal、Cascadia Mono、UTF-8、TrueColor、160×42；字符和合成 TTY 测试已实现，真实 Windows Terminal 截图验收状态见实施记录。
 
@@ -67,6 +69,6 @@ pnpm build
 pnpm smoke:package
 ```
 
-`dist/` 含可独立打包的 npm 包、CLI、SQLite Worker 及全部品牌文本；`smoke:package` 实际 pack、在独立临时目录安装并验证资源与命令。内部 Workspace 已打包，第三方为普通依赖。GitHub CI 在 Windows/Linux 检查。手工触发的 `release.yml` 重新验证版本、检查和安装包，使用 `release/release-<版本>.md` 作为发布说明；开发期间不会自动创建 Tag 或 Release。
+`dist/` 含可独立打包的 npm 包、CLI、SQLite Worker 及全部品牌文本；`smoke:package` 实际 pack、在独立临时目录安装，并通过本地 HTTP 协议夹具完成跨文件修改、真实测试失败后修复、SQLite 持久化和完成会话的无重放恢复。该检查证明安装产物的完整链路，不替代真实供应商验收。内部 Workspace 已打包，第三方为普通依赖。GitHub CI 在 Windows/Linux 检查。手工触发的 `release.yml` 重新验证版本、检查和安装包，使用 `release/release-<版本>.md` 作为发布说明；开发期间不会自动创建 Tag 或 Release。
 
-更多说明：[开发计划](docs/cli-tui-phase-one-plan.md)、[实施与验收记录](docs/development-status.md)、[工程决策](docs/adr/0001-phase-one-foundation.md)、[工具 Schema 与权限](packages/tool/README.md)、[模型协议](packages/model/README.md)、[执行与恢复](packages/execution/README.md)。
+更多说明：[开发计划](docs/cli-tui-phase-one-plan.md)、[实施与验收记录](docs/development-status.md)、[基础工程决策](docs/adr/0001-phase-one-foundation.md)、[恢复与上下文决策](docs/adr/0002-stable-checkpoints-and-context-memory.md)、[工具 Schema 与权限](packages/tool/README.md)、[模型协议](packages/model/README.md)、[执行与恢复](packages/execution/README.md)、[Windows Terminal 人工验收](docs/windows-terminal-acceptance.md)。

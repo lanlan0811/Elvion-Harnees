@@ -18,7 +18,7 @@ describe('bounded objective task planning', () => {
     expect(budget.snapshot().turns).toBe(1);
     const graph = new TaskGraph(plan);
     expect(graph.next()?.id).toBe('base');
-    graph.transition('base', 'running');
+    expect(graph.transition('base', 'running').status).toBe('running');
     expect(() => graph.transition('base', 'completed')).toThrow('verification');
     graph.transition('base', 'completed', { verified: true });
     expect(graph.next()?.id).toBe('feature');

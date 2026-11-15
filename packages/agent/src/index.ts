@@ -1,4 +1,4 @@
-import { buildContext } from '@elvion/context';
+import { buildContext, compactContext } from '@elvion/context';
 import { buildSystemPrompt } from '@elvion/prompt';
 import { ToolRuntime } from '@elvion/tool';
 import { BudgetTracker, ElvionError, raceWithSignal, throwIfAborted, ModelEventSchema, type ApprovalHandler, type JsonValue, type ModelEvent, type ModelMessage, type ModelRuntime, type PermissionMode, type ToolCall } from '@elvion/kernel';
@@ -10,6 +10,8 @@ export interface AgentOptions {
   runtime: ModelRuntime; model: string; tools: ToolRuntime; workspace: string;
   permissionMode: PermissionMode; signal: AbortSignal; budget: BudgetTracker;
   goal: string; messages: ModelMessage[]; approve?: ApprovalHandler;
+  acceptance?: string[]; decisions?: string[]; remaining?: string[]; maxContextCharacters?: number;
+  onBeforeModelTurn?: () => Promise<void>;
 }
 async function* cancellableModelEvents(stream: AsyncIterable<ModelEvent>, signal: AbortSignal): AsyncIterable<ModelEvent> {
   const iterator = stream[Symbol.asyncIterator]();
@@ -32,11 +34,24 @@ export async function* runAgent(options: AgentOptions): AsyncIterable<AgentEvent
   messages.splice(0, messages.length, { role: 'system', content: policy }, ...history);
   const redact = createSensitiveRedactor();
   while (true) {
-    throwIfAborted(signal); budget.consumeTurn();
+    throwIfAborted(signal);
+    const contextOptions = { goal: options.goal, ...(options.acceptance ? { acceptance: options.acceptance } : {}), ...(options.decisions ? { decisions: options.decisions } : {}), ...(options.remaining ? { remaining: options.remaining } : {}), ...(options.maxContextCharacters ? { maxCharacters: options.maxContextCharacters } : {}) };
+    const compactionEvents: AgentEvent[] = [];
+    let compacted;
+    try { compacted = await compactContext(redact.value(messages), { ...contextOptions, runtime: options.runtime, model: options.model, signal, budget, onUsage: usage => { compactionEvents.push({ type: 'model.usage', payload: { ...usage, source: 'context-compaction' } }); }, ...(options.onBeforeModelTurn ? { onBeforeModelTurn: options.onBeforeModelTurn } : {}) }); }
+    catch (error) { for (const event of compactionEvents) yield event; throw error; }
+    for (const event of compactionEvents) yield event;
+    if (compacted.compactedGroups) {
+      messages.splice(0, messages.length, ...redact.value(compacted.messages));
+      yield { type: 'agent.context_compacted', payload: { groups: compacted.compactedGroups, retainedMessages: messages.length } };
+    }
+    budget.consumeTurn();
     const calls: ToolCall[] = []; const ids = new Set<string>(); let text = ''; let done = false; let finishReason = '';
     const textStream = redact.stream();
     yield { type: 'agent.turn', payload: { turn: budget.snapshot().turns } };
-    for await (const raw of cancellableModelEvents(options.runtime.stream({ model: options.model, messages: redact.value(buildContext(messages, { goal: options.goal })), tools: options.tools.descriptors() }, { signal }), signal)) {
+    await options.onBeforeModelTurn?.();
+    throwIfAborted(signal);
+    for await (const raw of cancellableModelEvents(options.runtime.stream({ model: options.model, messages: redact.value(buildContext(messages, contextOptions)), tools: options.tools.descriptors() }, { signal }), signal)) {
       throwIfAborted(signal); budget.assertTimeRemaining();
       const event = ModelEventSchema.parse(raw);
       if (done) throw new ElvionError('model_error', 'Model emitted events after completion');

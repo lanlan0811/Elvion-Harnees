@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   ApprovalDecisionSchema,
+  ApprovalRequestSchema,
   BudgetLimitsSchema,
   BudgetTracker,
   CancellationScope,
@@ -23,6 +24,12 @@ import {
 } from '../src/index.js';
 
 describe('errors and untrusted input', () => {
+  it('accepts resolved approval working directories while retaining legacy request compatibility', () => {
+    const legacy = { id: 'approval-cwd', toolCall: { id: 'call-cwd', name: 'bash', arguments: { command: 'pwd', cwd: 'src' } }, workspace: 'D:/project', summary: 'Run pwd', scope: ['D:/project/src'] };
+    expect(ApprovalRequestSchema.parse(legacy).cwd).toBeUndefined();
+    expect(ApprovalRequestSchema.parse({ ...legacy, cwd: 'D:/project/src' }).cwd).toBe('D:/project/src');
+    expect(ApprovalRequestSchema.safeParse({ ...legacy, cwd: '' }).success).toBe(false);
+  });
   it('preserves a local cause and omits it from transport', () => {
     const cause = new Error('credential must stay local');
     const error = new ElvionError('tool_error', 'The tool failed', { cause, details: { tool: 'read_file' } });
@@ -74,6 +81,29 @@ describe('errors and untrusted input', () => {
 });
 
 describe('cancellation and deadlines', () => {
+  it('consumes a rejected promise returned by a callback that synchronously cancels its signal', async () => {
+    const controller = new AbortController();
+    const cancelled = new ElvionError('cancelled', 'Synchronous approval cancellation');
+    const unhandled = vi.fn();
+    process.on('unhandledRejection', unhandled);
+    try {
+      const approve = (): Promise<never> => { controller.abort(cancelled); return Promise.reject(new Error('Rejected callback result')); };
+      await expect(raceWithSignal(approve(), controller.signal)).rejects.toBe(cancelled);
+      await new Promise<void>(resolve => setImmediate(resolve));
+      expect(unhandled).not.toHaveBeenCalled();
+    } finally { process.removeListener('unhandledRejection', unhandled); }
+  });
+
+  it('consumes a later operation rejection after an already aborted signal wins the race', async () => {
+    const controller = new AbortController(); controller.abort();
+    const unhandled = vi.fn(); process.on('unhandledRejection', unhandled);
+    try {
+      const operation = new Promise<never>((_resolve, reject) => setImmediate(() => reject(new Error('Late underlying failure'))));
+      await expect(raceWithSignal(operation, controller.signal)).rejects.toMatchObject({ code: 'cancelled' });
+      await new Promise<void>(resolve => setImmediate(resolve));
+      expect(unhandled).not.toHaveBeenCalled();
+    } finally { process.removeListener('unhandledRejection', unhandled); }
+  });
   it('propagates an already-cancelled parent without exposing its reason', () => {
     const parent = new AbortController();
     parent.abort(new Error('private reason'));
@@ -135,6 +165,15 @@ describe('cancellation and deadlines', () => {
 });
 
 describe('bounded execution budgets', () => {
+  it('restores consumed turns tools retries repairs and elapsed active time without resetting caps', () => {
+    let now = 100;
+    const budget = new BudgetTracker({ maxTurns: 2, maxToolCalls: 2, maxRetries: 1, maxRepairs: 1, maxDurationMs: 1000 }, { now: () => now, restore: { turns: 1, toolCalls: 2, retries: 1, repairs: 1, elapsedMs: 800 } });
+    budget.consumeTurn();
+    for (const consume of [() => budget.consumeTurn(), () => budget.consumeToolCall(), () => budget.consumeRetry(), () => budget.consumeRepair()]) expect(consume).toThrowError(/budget exhausted/);
+    now = 300; expect(budget.usage()).toEqual({ turns: 2, toolCalls: 2, retries: 1, repairs: 1, elapsedMs: 1000 });
+    expect(() => budget.assertTimeRemaining()).toThrowError(/duration budget exhausted/);
+    expect(() => new BudgetTracker({ maxTurns: 1 }, { restore: { turns: 2, toolCalls: 0, retries: 0, repairs: 0, elapsedMs: 0 } })).toThrowError(/Saved budget/);
+  });
   it('matches the planned default ceilings', () => {
     expect(DEFAULT_BUDGET_LIMITS).toEqual({ maxTurns: 50, maxToolCalls: 100, maxDurationMs: 1_800_000, maxRetries: 2, maxRepairs: 2, toolTimeoutMs: 120_000 });
     expect(BudgetLimitsSchema.safeParse({ maxTurns: 0 }).success).toBe(false);

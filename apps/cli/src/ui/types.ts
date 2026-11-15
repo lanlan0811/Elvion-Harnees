@@ -6,7 +6,7 @@ export interface UiHealth { runtime: HealthStatus; execution: HealthStatus; tool
 export type SlashCommand = 'provider' | 'model' | 'permissions' | 'sessions' | 'resume' | 'new' | 'help';
 export interface UiMessage {
   id: string;
-  kind: 'user' | 'assistant' | 'tool' | 'system' | 'verification' | 'error' | 'diff' | 'report';
+  kind: 'user' | 'assistant' | 'tool' | 'task' | 'usage' | 'system' | 'verification' | 'error' | 'diff' | 'report';
   text: string;
   title?: string;
   status?: string;

@@ -6,7 +6,7 @@ import { pathExists } from './paths.js';
 import type { Inputs } from './schemas.js';
 import { runProcess, type ProcessOptions, type ProcessResult } from './process.js';
 
-const prefix = ['--no-pager', '-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=false', '-c', 'core.quotePath=false', '-c', 'diff.external=', '-c', 'protocol.file.allow=never'];
+const prefix = ['--no-pager', '--literal-pathspecs', '-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=false', '-c', 'core.quotePath=false', '-c', 'diff.external=', '-c', 'protocol.file.allow=never'];
 export async function git(args: readonly string[], options: ProcessOptions): Promise<ProcessResult> {
   return runProcess('git', [...prefix, ...args], { ...options, superviseTree: options.superviseTree ?? false });
 }
@@ -44,10 +44,14 @@ export async function executeGit(input: Inputs<'git'>, paths: string[], ownershi
     case 'commit': {
       await ownership.assertOwned(paths);
       if (!input.message) throw new ElvionError('validation_error', 'Commit requires a message');
-      const staged = await git(['diff', '--cached', '--name-only', '-z'], options);
+      const staged = await git(['-c', 'diff.relative=false', 'diff', '--cached', '--name-only', '-z'], options);
       if (staged.exitCode !== 0) return staged;
+      const repository = await git(['rev-parse', '--show-toplevel'], options);
+      if (repository.exitCode !== 0) return repository;
+      const repositoryRoot = repository.stdout.replace(/\r?\n$/, '');
+      const repositoryPaths = paths.map(path => relative(repositoryRoot, path).replaceAll('\\', '/'));
       const stagedPaths = staged.stdout.split('\0').filter(Boolean);
-      if (stagedPaths.some(path => !relPaths.includes(path))) throw new ElvionError('conflict', 'Unrelated staged changes exist; commit was not attempted');
+      if (stagedPaths.some(path => !repositoryPaths.includes(path))) throw new ElvionError('conflict', 'Unrelated staged changes exist; commit was not attempted');
       return git(['-c', 'commit.gpgSign=false', 'commit', '--only', '-m', input.message, '--', ...relPaths], { ...options, superviseTree: true });
     }
   }

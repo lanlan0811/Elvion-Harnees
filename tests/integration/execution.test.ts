@@ -223,14 +223,16 @@ describe('real local execution with scripted model events', () => {
     } finally { await first.return?.(); }
     expect(await readdir(join(directory, 'locks'))).toEqual([]);
   });
-  it('restores saved ask permissions without silently approving resumed tool calls', async () => {
+  it('restores a completed ask-mode session without silently starting another task', async () => {
     const now = new Date().toISOString();
     const state: SessionSnapshot = { schemaVersion: 1, id: randomUUID(), workspace: directory, providerId: 'scripted-local-fixture', permissions: 'ask', state: 'completed', task: 'previous task', messages: [{ role: 'user', content: '旧任务' }, { role: 'assistant', content: '已完成' }], lastSequence: 0, createdAt: now, updatedAt: now };
-    await repository.save(state);
+    const completed = new EventSequencer({ sessionId: state.id }).next('execution.completed', { report: { passed: true, checks: [{ name: 'test', command: ['node', 'check.mjs'], exitCode: 0, status: 'passed', evidence: 'Independent check completed' }] } });
+    state.lastSequence = completed.sequence; await repository.save(state, [completed]);
     const runtime = new ScriptedModel([calls(tool('write_file', { path: 'restore-blocked.txt', content: 'blocked' }))]);
     const events = await collect(executeTask({ ...options(runtime), session: state }));
     expect(events[0]?.payload).toMatchObject({ permissions: 'ask' });
-    expect(events.at(-1)?.type).toBe('execution.approval_required');
+    expect(events.map(event => event.type)).toEqual(['session.restored', 'execution.completed']);
+    expect(runtime.requests).toHaveLength(0);
     expect((await repository.get(state.id))?.permissions).toBe('ask');
     await expect(readFile(join(directory, 'restore-blocked.txt'))).rejects.toMatchObject({ code: 'ENOENT' });
   });
@@ -312,14 +314,17 @@ describe('real local execution with scripted model events', () => {
     const persisted = await repository.events(events[0]!.sessionId);
     expect(persisted.filter(event => event.type === 'tool.started')).toHaveLength(1);
   });
-  it('does not replay completed task side effects when continuing a stable session', async () => {
+  it('does not replay or replan a completed task when restoring a stable session', async () => {
     await writeFile(join(directory, 'once.txt'), 'old task side effect');
     const now = new Date().toISOString();
     const state: SessionSnapshot = { schemaVersion: 1, id: randomUUID(), workspace: directory, providerId: 'scripted-local-fixture', permissions: 'auto-edit', state: 'completed', task: 'old completed task', messages: [{ role: 'user', content: 'old task' }, { role: 'assistant', content: '', toolCalls: [{ id: 'old-write', name: 'write_file', arguments: { path: 'once.txt', content: 'old task side effect' } }] }, { role: 'tool', toolCallId: 'old-write', content: JSON.stringify({ status: 'success' }) }, { role: 'assistant', content: 'done' }], lastSequence: 0, createdAt: now, updatedAt: now };
-    await repository.save(state);
+    const completed = new EventSequencer({ sessionId: state.id }).next('execution.completed', { report: { passed: true, checks: [{ name: 'test', command: ['node', 'check.mjs'], exitCode: 0, status: 'passed', evidence: 'Independent check completed' }] } });
+    state.lastSequence = completed.sequence; await repository.save(state, [completed]);
     const runtime = new ScriptedModel([delivery('新任务等待验证')]);
     const events = await collect(executeTask({ ...options(runtime), task: 'new task', session: state }));
-    expect(runtime.requests).toHaveLength(1);
+    expect(runtime.requests).toHaveLength(0);
+    expect(events.map(event => event.type)).toEqual(['session.restored', 'execution.completed']);
+    expect((await repository.get(state.id))?.task).toBe('old completed task');
     expect(events.filter(event => event.type === 'tool.started' && typeof event.payload === 'object' && event.payload !== null && !Array.isArray(event.payload) && event.payload['source'] === undefined)).toHaveLength(0);
     expect(await readFile(join(directory, 'once.txt'), 'utf8')).toBe('old task side effect');
   });
@@ -353,6 +358,7 @@ describe('real local execution with scripted model events', () => {
     expect(await readFile(join(directory, 'private.txt'), 'utf8')).toBe(`token=${secret}`);
   });
   it('plans and verifies two dependent tasks through real tool effects and ordered scheduling', async () => {
+    await writeFile(join(directory, 'AGENTS.md'), 'Keep the existing exported interfaces.');
     await writeFile(join(directory, 'package.json'), JSON.stringify({ private: true, type: 'module', scripts: { test: 'node verify.mjs' } }));
     await writeFile(join(directory, 'verify.mjs'), `import {readFileSync,existsSync} from 'node:fs';\nif(readFileSync('first.txt','utf8')!=='first') process.exitCode=1;\nif(existsSync('second.txt') && readFileSync('second.txt','utf8')!=='first+second') process.exitCode=1;\n`);
     const runtime = new ScriptedModel([delivery(JSON.stringify([{ id: 'first', title: 'Create first file', acceptance: ['First file has correct content'], dependsOn: [] }, { id: 'second', title: 'Create dependent second file', acceptance: ['Second file builds on first'], dependsOn: ['first'] }])), calls(tool('write_file', { path: 'first.txt', content: 'first' })), delivery('First step ready for verification'), calls(tool('read_file', { path: 'first.txt' }), tool('write_file', { path: 'second.txt', content: 'first+second' })), delivery('Second step ready for verification')]);
@@ -369,6 +375,12 @@ describe('real local execution with scripted model events', () => {
     const secondStarted = events.findIndex((event, index) => index > firstCompleted && event.type === 'task.started');
     expect(firstCompleted).toBeGreaterThan(0); expect(secondStarted).toBeGreaterThan(firstCompleted);
     expect(runtime.requests[0]?.tools?.length ?? 0).toBe(0);
+    expect(runtime.requests[0]?.messages[1]?.content).toContain('Keep the existing exported interfaces.');
+    expect(runtime.requests[0]?.messages[1]?.content).toContain('node verify.mjs');
+    const analysis = events.findIndex(event => event.type === 'project.analyzed');
+    const planning = events.findIndex(event => event.type === 'task.planning');
+    expect(analysis).toBeGreaterThan(0); expect(planning).toBeGreaterThan(analysis);
+    expect(events.filter(event => event.type === 'tool.started' && typeof event.payload === 'object' && event.payload !== null && !Array.isArray(event.payload) && event.payload['source'] === 'project-analysis').length).toBeGreaterThan(2);
     expect(await readFile(join(directory, 'first.txt'), 'utf8')).toBe('first');
     expect(await readFile(join(directory, 'second.txt'), 'utf8')).toBe('first+second');
   }, 120_000);

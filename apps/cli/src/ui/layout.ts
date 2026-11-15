@@ -14,6 +14,15 @@ export function selectLayout(columns: number, rows: number): Layout {
   if (columns >= 116 && rows >= 28) return 'small';
   return columns >= 72 ? 'wordmark' : 'compact';
 }
+export function frameGeometry(rows: number): { headerRows: number; bodyRows: number; separatorRows: number; inputRows: number; footerRows: number; statusRows: number } {
+  let remaining = Math.max(0, Math.floor(rows));
+  const inputRows = Math.min(3, remaining); remaining -= inputRows;
+  const statusRows = remaining > 0 ? 1 : 0; remaining -= statusRows;
+  const footerRows = remaining > 0 ? 1 : 0; remaining -= footerRows;
+  const separatorRows = remaining > 0 ? 1 : 0; remaining -= separatorRows;
+  const headerRows = remaining >= 2 ? 2 : 0; remaining -= headerRows;
+  return { headerRows, bodyRows: remaining, separatorRows, inputRows, footerRows, statusRows };
+}
 export function frameToText(lines: readonly FrameLine[]): string[] { return lines.map(line => line.parts.map(part => part.text).join('')); }
 function text(value = '', tone: Tone = 'text'): FrameLine { return { parts: [{ text: value, tone }] }; }
 function width(line: FrameLine): number { return line.parts.reduce((size, part) => size + cellWidth(part.text), 0); }
@@ -41,7 +50,7 @@ function healthCard(columns: number, health: UiHealth): FrameLine[] {
 /** A cell grid is also the testable source of the live Ink welcome panel. */
 export function buildWelcomeFrame(options: WelcomeOptions): FrameLine[] {
   const columns = Math.max(1, Math.floor(options.columns));
-  const rows = Math.max(0, Math.floor(options.rows) - 8);
+  const rows = frameGeometry(options.rows).bodyRows;
   if (rows === 0) return [];
   const layout = selectLayout(columns, options.rows);
   const margin = columns >= 72 ? 2 : 1;

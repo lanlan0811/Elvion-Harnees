@@ -6,6 +6,8 @@ function messageTone(message: UiMessage): Tone {
   if (message.kind === 'error') return 'error';
   if (message.kind === 'user') return 'brand';
   if (message.kind === 'system') return 'muted';
+  if (message.kind === 'task') return message.status === 'completed' ? 'ok' : message.status === 'failed' ? 'error' : 'brand';
+  if (message.kind === 'usage') return 'muted';
   return 'text';
 }
 export function messageLines(messages: readonly UiMessage[], columns: number): FrameLine[] {
@@ -23,11 +25,11 @@ export function messageLines(messages: readonly UiMessage[], columns: number): F
   }
   return lines;
 }
-export function messageViewport(messages: readonly UiMessage[], columns: number, rows: number, scrollOffset: number): { lines: FrameLine[]; offset: number; hiddenAbove: number } {
+export function messageViewport(messages: readonly UiMessage[], columns: number, rows: number, scrollOffset: number): { lines: FrameLine[]; offset: number; hiddenAbove: number; totalLines: number } {
   const all = messageLines(messages, columns);
   const height = Math.max(0, rows);
   const offset = Math.min(Math.max(0, scrollOffset), Math.max(0, all.length - height));
   const end = Math.max(0, all.length - offset);
   const start = Math.max(0, end - height);
-  return { lines: all.slice(start, end), offset, hiddenAbove: start };
+  return { lines: all.slice(start, end), offset, hiddenAbove: start, totalLines: all.length };
 }

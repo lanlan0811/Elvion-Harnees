@@ -1,7 +1,7 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { mkdtemp, mkdir, readFile, rm, symlink, writeFile, stat } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, readdir, realpath, rm, symlink, writeFile, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -9,11 +9,12 @@ import { ToolResultSchema, type JsonObject, type PermissionMode, type ToolCall, 
 import { ToolRuntime } from './runtime.js';
 import { findGitBash } from './process.js';
 import { applyHunks, parsePatch } from './patch.js';
+import * as files from './files.js';
 
 const exec = promisify(execFile);
 let root: string; let workspace: string; let runtime: ToolRuntime;
 beforeEach(async () => { root = await mkdtemp(join(tmpdir(), 'elvion-tools-')); workspace = join(root, '工作区'); await mkdir(workspace); runtime = new ToolRuntime(); });
-afterEach(async () => { await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }); });
+afterEach(async () => { vi.restoreAllMocks(); await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }); });
 const call = (name: string, args: JsonObject): ToolCall => ({ id: randomUUID(), name, arguments: args });
 const execute = async (name: string, args: JsonObject, mode: PermissionMode = 'auto-edit'): Promise<ToolResult> => {
   const result = await runtime.execute(call(name, args), { workspace, permissionMode: mode, signal: new AbortController().signal });
@@ -54,6 +55,27 @@ describe('tool registry and file tools', () => {
     for (const path of ['large', 'bin', 'utf']) expect((await execute('read_file', { path })).status).toBe('error');
     expect((await execute('read_file', { path: 'large', startLine: 3, endLine: 2 })).status).toBe('error');
   });
+  it('reads exact near-limit UTF-8/CRLF ranges and preserves BOM and empty-file semantics', async () => {
+    const line = '中文范围' + 'x'.repeat(980) + '\r';
+    const lineCount = Math.floor(1_999_999 / Buffer.byteLength(line + '\n'));
+    const content = (line + '\n').repeat(lineCount);
+    expect(Buffer.byteLength(content)).toBeGreaterThan(1_990_000);
+    await writeFile(join(workspace, '接近上限.txt'), content);
+    const range = await execute('read_file', { path: '接近上限.txt', startLine: lineCount - 1, endLine: lineCount });
+    expect(range.truncated).toBe(false);
+    expect(output(range)).toMatchObject({ content: line + '\n' + line, startLine: lineCount - 1, endLine: lineCount, totalLines: lineCount, hash: files.hash(content) });
+    const beyond = output(await execute('read_file', { path: '接近上限.txt', startLine: lineCount + 1 }));
+    expect(beyond).toMatchObject({ content: '', startLine: lineCount + 1, endLine: lineCount, totalLines: lineCount });
+    await writeFile(join(workspace, 'empty.txt'), '');
+    expect(output(await execute('read_file', { path: 'empty.txt' }))).toMatchObject({ content: '', startLine: 1, endLine: 1, totalLines: 1, hash: files.hash('') });
+    await writeFile(join(workspace, 'bom.txt'), '\uFEFF第一行\r\n末行');
+    expect(output(await execute('read_file', { path: 'bom.txt' }))['content']).toBe('\uFEFF第一行\r\n末行');
+    expect(output(await execute('read_file', { path: 'bom.txt', startLine: 1, endLine: 1 }))['content']).toBe('\uFEFF第一行\r');
+    expect(output(await execute('read_file', { path: 'bom.txt', startLine: 2, endLine: 99 }))).toMatchObject({ content: '末行', startLine: 2, endLine: 2, totalLines: 2 });
+    await writeFile(join(workspace, 'over-limit.txt'), 'x'.repeat(2_000_001));
+    const tooLarge = await execute('read_file', { path: 'over-limit.txt', startLine: 1, endLine: 1 });
+    expect(tooLarge).toMatchObject({ status: 'error', error: { code: 'validation_error' } });
+  });
   it('bounds output, redacts known credentials, and records result/time without file contents', async () => {
     process.env['ELVION_TEST_TOKEN'] = 'sensitive_token_for_test';
     try {
@@ -67,6 +89,17 @@ describe('tool registry and file tools', () => {
 });
 
 describe('permissions and canonical paths', () => {
+  it('reports the resolved tool working directory separately from workspace before approval', async () => {
+    await mkdir(join(workspace, 'src')); await mkdir(join(root, 'external'));
+    for (const cwd of ['src', '../external']) {
+      const pending = await execute('bash', { command: 'echo must-not-execute', cwd });
+      expect(pending.status).toBe('approval_required');
+      if (pending.status !== 'approval_required') throw new Error('Expected a pending approval');
+      const resolved = await realpath(join(workspace, cwd));
+      expect(pending.approval).toMatchObject({ workspace: await realpath(workspace), cwd: resolved, scope: [resolved], toolCall: { name: 'bash', arguments: { cwd } } });
+    }
+    expect(runtime.auditLog().filter(item => item.phase === 'finished').every(item => item.status === 'approval_required')).toBe(true);
+  });
   it('requires approval for every ask-mode tool, including todo, and correlates a unique approval ID', async () => {
     const pending = await execute('todo', { operation: 'list' }, 'ask'); expect(pending.status).toBe('approval_required');
     const request = call('todo', { operation: 'add', text: 'approved' });
@@ -136,6 +169,44 @@ describe('unified patches', () => {
     const target = parsePatch('--- a/a\n+++ b/a\n@@ -1 +1 @@\n-old\n\\ No newline at end of file\n+new\n\\ No newline at end of file\n')[0]!;
     expect(applyHunks('old', target)).toBe('new'); expect(() => applyHunks('old\n', target)).toThrow();
   });
+  it('rolls back real edit/create/delete operations after a later write fails', async () => {
+    workspace = await realpath(workspace);
+    await writeFile(join(workspace, 'modified.txt'), 'before\r\n');
+    await writeFile(join(workspace, 'deleted.txt'), 'deleted\n');
+    const originalWrite = files.atomicWrite; let injected = 0; const writes: string[] = [];
+    vi.spyOn(files, 'atomicWrite').mockImplementation(async (path, content, expected) => {
+      writes.push(path);
+      if (path === join(workspace, 'last.txt')) { injected++; throw new Error('Injected final write failure'); }
+      return originalWrite(path, content, expected);
+    });
+    const patch = '--- a/modified.txt\n+++ b/modified.txt\n@@ -1 +1 @@\n-before\n+after\n--- /dev/null\n+++ b/created.txt\n@@ -0,0 +1 @@\n+created\n--- a/deleted.txt\n+++ /dev/null\n@@ -1 +0,0 @@\n-deleted\n--- /dev/null\n+++ b/last.txt\n@@ -0,0 +1 @@\n+last\n';
+    const result = await execute('apply_patch', { patch });
+    expect(injected).toBe(1); expect(result).toMatchObject({ status: 'error', error: { code: 'tool_error' } });
+    if (result.status === 'error') expect(result.error.details?.['requiresReview']).not.toBe(true);
+    expect(await readFile(join(workspace, 'modified.txt'), 'utf8')).toBe('before\r\n');
+    expect(await readFile(join(workspace, 'deleted.txt'), 'utf8')).toBe('deleted\n');
+    await expect(stat(join(workspace, 'created.txt'))).rejects.toThrow(); await expect(stat(join(workspace, 'last.txt'))).rejects.toThrow();
+    expect(writes).toEqual(['modified.txt', 'created.txt', 'last.txt', 'deleted.txt', 'modified.txt'].map(path => join(workspace, path)));
+    expect((await readdir(workspace)).some(name => name.startsWith('.elvion-'))).toBe(false);
+  });
+  it('rolls back the first completed file if cancellation arrives before the next patch target', async () => {
+    workspace = await realpath(workspace);
+    await writeFile(join(workspace, 'first.txt'), 'before\n'); await writeFile(join(workspace, 'second.txt'), 'untouched\n');
+    const controller = new AbortController(); const originalWrite = files.atomicWrite; let cancelledAfterWrite = 0; let rollbackWrites = 0;
+    vi.spyOn(files, 'atomicWrite').mockImplementation(async (path, content, expected) => {
+      const change = await originalWrite(path, content, expected);
+      if (path === join(workspace, 'first.txt') && content === 'after\n') { cancelledAfterWrite++; controller.abort(); }
+      else if (path === join(workspace, 'first.txt') && content === 'before\n') rollbackWrites++;
+      return change;
+    });
+    const patch = '--- a/first.txt\n+++ b/first.txt\n@@ -1 +1 @@\n-before\n+after\n--- a/second.txt\n+++ b/second.txt\n@@ -1 +1 @@\n-untouched\n+must-not-write\n';
+    const result = await runtime.execute(call('apply_patch', { patch }), { workspace, permissionMode: 'auto-edit', signal: controller.signal });
+    expect(result).toMatchObject({ status: 'cancelled', error: { code: 'cancelled' } });
+    expect(cancelledAfterWrite).toBe(1); expect(rollbackWrites).toBe(1);
+    expect(await readFile(join(workspace, 'first.txt'), 'utf8')).toBe('before\n');
+    expect(await readFile(join(workspace, 'second.txt'), 'utf8')).toBe('untouched\n');
+    expect((await readdir(workspace)).some(name => name.startsWith('.elvion-'))).toBe(false);
+  });
 });
 
 describe('structured Git and real Git Bash', { timeout: 60_000 }, () => {
@@ -159,6 +230,36 @@ describe('structured Git and real Git Bash', { timeout: 60_000 }, () => {
     await git('add', '--', 'existing');
     expect((await execute('git', { operation: 'commit', paths: ['owned'], message: 'no' }, 'full-access')).status).toBe('error');
     expect(await git('log', '--format=%s')).toBe('base\n');
+  });
+  it('treats bracket filenames as literal paths without staging or committing matching user files', async () => {
+    await initRepo(); await writeFile(join(workspace, 'filea.txt'), 'baseline\n');
+    await git('add', '--', 'filea.txt'); await git('commit', '-m', 'base');
+    await execute('write_file', { path: 'file[ab].txt', content: 'owned\n' });
+    // Change after ownership capture so this also detects add/commit pathspec expansion.
+    await writeFile(join(workspace, 'filea.txt'), 'user change\n');
+    expect(output(await execute('git', { operation: 'add', paths: ['file[ab].txt'] }, 'full-access'))['exitCode']).toBe(0);
+    expect(await git('diff', '--cached', '--name-only')).toBe('file[ab].txt\n');
+    expect(output(await execute('git', { operation: 'commit', paths: ['file[ab].txt'], message: 'literal file only' }, 'full-access'))['exitCode']).toBe(0);
+    expect(await git('show', '--format=', '--name-only', 'HEAD')).toBe('file[ab].txt\n');
+    expect(await git('show', 'HEAD:filea.txt')).toBe('baseline\n');
+    expect(await readFile(join(workspace, 'filea.txt'), 'utf8')).toBe('user change\n');
+    expect(await git('status', '--porcelain')).toContain(' M filea.txt');
+  });
+  it('compares subdirectory commit paths from the repository root and rejects staged changes outside that directory', async () => {
+    await initRepo(); await writeFile(join(workspace, 'outside.txt'), 'baseline\n'); await mkdir(join(workspace, 'src'));
+    await git('add', '--', 'outside.txt'); await git('commit', '-m', 'base');
+    await execute('write_file', { path: 'src/owned.txt', content: 'owned\n' });
+    expect(output(await execute('git', { operation: 'add', cwd: 'src', paths: ['owned.txt'] }, 'full-access'))['exitCode']).toBe(0);
+    expect(output(await execute('git', { operation: 'commit', cwd: 'src', paths: ['owned.txt'], message: 'subdirectory only' }, 'full-access'))['exitCode']).toBe(0);
+    expect(await git('show', '--format=', '--name-only', 'HEAD')).toBe('src/owned.txt\n');
+    await execute('edit_file', { path: 'src/owned.txt', oldText: 'owned', newText: 'updated' });
+    await execute('git', { operation: 'add', cwd: 'src', paths: ['owned.txt'] }, 'full-access');
+    await writeFile(join(workspace, 'outside.txt'), 'user staged change\n'); await git('add', '--', 'outside.txt');
+    await git('config', 'diff.relative', 'true');
+    const blocked = await execute('git', { operation: 'commit', cwd: 'src', paths: ['owned.txt'], message: 'must not commit' }, 'full-access');
+    expect(blocked).toMatchObject({ status: 'error', error: { code: 'conflict' } });
+    expect(await git('log', '-1', '--format=%s')).toBe('subdirectory only\n');
+    expect(await git('diff', '--cached', '--name-only')).toBe('outside.txt\nsrc/owned.txt\n');
   });
   it('finds Git Bash, requires authorization, captures exit codes and bounds output', async () => {
     expect(await findGitBash()).toContain('bash'); await expect(findGitBash(join(root, 'missing.exe'))).rejects.toThrow();

@@ -43,7 +43,7 @@ Usage:
   elvion                                    Interactive TUI
   elvion run "<task>" [--json]             Run one coding task
   elvion sessions list [--json]              List saved sessions
-  elvion resume <id> [--json]                Restore saved state/report without replaying operations
+  elvion resume <id> [--json]                Continue a safe checkpoint; completed sessions show saved reports
   elvion providers add <id> --protocol <protocol> --url <baseUrl> --model <model> [--key-env <ENV>]
   elvion providers edit <id> [--model <model>] [--tools true|false] [--timeout <ms>]
   elvion providers list

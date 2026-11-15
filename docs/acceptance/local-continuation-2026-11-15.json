@@ -1,0 +1,45 @@
+{
+  "date": "2026-11-15",
+  "timezone": "Asia/Shanghai",
+  "scope": "Stable continuation, bounded context compaction, authorized project discovery, approval audit, TUI restoration and installed coding loop",
+  "baselineCommit": "e780f4c91bca6840da054cc319be473491608c3c",
+  "quality": {
+    "command": "pnpm check",
+    "exitCode": 0,
+    "testStartLocalTime": "18:20:15",
+    "testDurationSeconds": 112.9,
+    "testFilesPassed": 21,
+    "testsPassed": 283,
+    "testsSkipped": 1,
+    "skipReason": "Non-Windows SIGINT case; Windows-specific console cancellation is exercised separately",
+    "stagesPassed": ["lint", "workspace and test typecheck", "unit/integration/e2e", "build"]
+  },
+  "installedPackage": {
+    "command": "pnpm smoke:package",
+    "exitCode": 0,
+    "modelSource": "Loopback HTTP fixture, not a live provider",
+    "independentInstallation": true,
+    "generatedBinExercised": true,
+    "codingRequests": 5,
+    "toolCalls": 15,
+    "engineVerificationExitCodes": [1, 0],
+    "externalProjectTestExitCode": 0,
+    "originalScriptsAndAssertionsPreserved": true,
+    "sqliteEventsMatchOutput": true,
+    "repeatResumeCount": 2,
+    "restoredWithoutReplay": true
+  },
+  "terminalObservation": {
+    "environment": "Windows ConPTY, stdin/stdout isTTY=true",
+    "columns": 80,
+    "rows": 24,
+    "observed": ["welcome", "help and Escape", "Chinese two-line bracketed paste without submission", "idle Ctrl+C exit 0", "cursor and paste mode restored"],
+    "isFormalWindowsTerminalAcceptance": false
+  },
+  "outstanding": [
+    "Exact final commit Windows and Ubuntu CI is recorded separately after push",
+    "User deferred remaining real provider protocol configurations; they remain unaccepted",
+    "User will perform formal Windows Terminal visual, IME and full PTY matrix acceptance using docs/windows-terminal-acceptance.md"
+  ],
+  "releaseCreated": false
+}

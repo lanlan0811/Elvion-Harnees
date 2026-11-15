@@ -5,7 +5,7 @@ import { PassThrough, Writable } from 'node:stream';
 import { fileURLToPath } from 'node:url';
 import { readFile } from 'node:fs/promises';
 import { brandLines, loadBrandAssets } from './ui/brand.js';
-import { buildWelcomeFrame, frameToText, gradientColor, noColor, selectLayout } from './ui/layout.js';
+import { buildWelcomeFrame, frameGeometry, frameToText, gradientColor, noColor, selectLayout } from './ui/layout.js';
 import { parseSubmission, SLASH_COMMANDS, transitionInput } from './ui/input.js';
 import { messageLines, messageViewport } from './ui/messages.js';
 import { cellWidth, cleanText, truncate, wrapText } from './ui/text.js';
@@ -48,6 +48,12 @@ describe('brand grid and responsive breakpoints', () => {
     expect(gradientColor(0, 3)).toBe('#70dcff');
     expect(gradientColor(1, 3)).toBe('#6fa0f4');
     expect(gradientColor(2, 3)).toBe('#a18dff');
+  });
+  it.each([1, 2, 4, 6, 7, 8, 12, 24, 42])('reserves visible input before welcome content at height %s', rows => {
+    const geometry = frameGeometry(rows);
+    expect(Object.values(geometry).reduce((total, value) => total + value, 0)).toBe(rows);
+    expect(geometry.inputRows).toBe(Math.min(3, rows));
+    if (rows >= 4) expect(geometry.statusRows).toBe(1);
   });
 });
 
@@ -106,10 +112,11 @@ describe('live Ink input and approvals', () => {
     const raw = vi.fn();
     const stdin = Object.assign(input, { isTTY: true, setRawMode: raw, ref() {}, unref() {} }) as unknown as NodeJS.ReadStream;
     let output = '';
-    const stdout = Object.assign(new Writable({ write(chunk: Buffer, _encoding, done) { output += chunk.toString(); done(); } }), { columns: 160, rows: 42, isTTY: true }) as unknown as NodeJS.WriteStream;
+    const writes: string[] = [];
+    const stdout = Object.assign(new Writable({ write(chunk: Buffer, _encoding, done) { const text = chunk.toString(); output += text; writes.push(text); done(); } }), { columns: 160, rows: 42, isTTY: true }) as unknown as NodeJS.WriteStream;
     const allProps: ElvionAppProps = { version: '0.1.0', assets, health, permissionMode: 'auto-edit', messages: [], busy: false, workspace: '测试项目', onSubmit, onCommand, onCancel, onApproval, ...props };
     const app = render(createElement(ElvionApp, allProps), { stdin, stdout, stderr: stdout, exitOnCtrlC: false, patchConsole: false, maxFps: 120 });
-    return { app, stdin, stdout, input, raw, onSubmit, onCommand, onCancel, onApproval, props: allProps, output: () => output };
+    return { app, stdin, stdout, input, raw, onSubmit, onCommand, onCancel, onApproval, props: allProps, output: () => output, frames: () => writes.filter(value => cleanText(value).includes('ELVION CLI v0.1.0')) };
   }
   it('uses the Ink parser for Enter, Ctrl+J, pasted Chinese and slash commands', async () => {
     const t = terminal();
@@ -148,6 +155,71 @@ describe('live Ink input and approvals', () => {
       t.input.write('y');
       await new Promise(resolve => setImmediate(resolve));
       expect(t.onApproval).toHaveBeenCalledTimes(1);
+    } finally { t.app.unmount(); t.app.cleanup(); }
+  });
+  it('accepts bracketed Chinese multiline paste without submitting and restores terminal mode on idle exit', async () => {
+    const onExit = vi.fn(); const t = terminal({ onExit });
+    try {
+      await vi.waitFor(() => expect(t.raw).toHaveBeenCalledWith(true));
+      t.input.write('\u001b[200~中文\r\n第二行\u001b[201~');
+      await new Promise(resolve => setImmediate(resolve));
+      expect(t.onSubmit).not.toHaveBeenCalled();
+      t.input.write('\r');
+      await vi.waitFor(() => expect(t.onSubmit).toHaveBeenCalledExactlyOnceWith('中文\n第二行'));
+      t.input.write('\u0003');
+      await t.app.waitUntilExit();
+      expect(onExit).toHaveBeenCalledExactlyOnceWith();
+      expect(t.raw).toHaveBeenLastCalledWith(false);
+      expect(t.output()).toContain('\u001b[?2004l');
+    } finally { t.app.unmount(); t.app.cleanup(); }
+  });
+  it('keeps a live message viewport scrollable during appended output and actual resize events', async () => {
+    const messages = Array.from({ length: 40 }, (_, index) => ({ id: `message-${index}`, kind: 'tool' as const, title: `Tool ${index}`, text: `line ${index}\nnext` }));
+    const t = terminal({ busy: true, messages });
+    try {
+      await vi.waitFor(() => expect(t.raw).toHaveBeenCalledWith(true));
+      t.input.write('\u001b[5~');
+      await new Promise(resolve => setImmediate(resolve));
+      t.app.rerender(createElement(ElvionApp, { ...t.props, messages: [...messages, { id: 'new', kind: 'tool', title: 'New output', text: 'followed' }] }));
+      t.stdout.columns = 80; t.stdout.rows = 24; t.stdout.emit('resize');
+      await new Promise(resolve => setImmediate(resolve));
+      t.app.unmount(); await t.app.waitUntilExit();
+      expect(t.output()).toContain('历史记录');
+      expect(t.output()).toContain('PgDn');
+      expect(t.output()).toContain('自动编辑');
+      // Fullscreen Ink redraws one complete frame per write. Concatenated output
+      // contains erased 160-column screens; stripping ANSI cannot replay erasure.
+      const finalFrame = t.frames().at(-1);
+      expect(finalFrame).toBeDefined();
+      const final = cleanText(finalFrame!).trimEnd().split('\n');
+      expect(final).toHaveLength(24);
+      expect(final.every(value => cellWidth(value) <= 80)).toBe(true);
+      expect(final.some(value => value.includes('自动编辑'))).toBe(true);
+    } finally { t.app.unmount(); t.app.cleanup(); }
+  });
+  it('scrolls long session overlays and closes them on Escape without submitting', async () => {
+    const onCloseOverlay = vi.fn(); const t = terminal({ overlay: { title: 'Saved sessions', lines: Array.from({ length: 70 }, (_, index) => `saved-session-${index}`) }, onCloseOverlay });
+    try {
+      await vi.waitFor(() => expect(t.raw).toHaveBeenCalledWith(true));
+      t.input.write('\u001b[6~');
+      await new Promise(resolve => setImmediate(resolve));
+      t.input.write('\u001b');
+      await vi.waitFor(() => expect(onCloseOverlay).toHaveBeenCalledOnce());
+      t.app.unmount(); await t.app.waitUntilExit();
+      expect(t.output()).toContain('saved-session-32');
+      expect(t.onSubmit).not.toHaveBeenCalled();
+    } finally { t.app.unmount(); t.app.cleanup(); }
+  });
+  it('never treats pasted approval text as a decision and accepts only the current approval id', async () => {
+    const approval = { id: 'approval-paste', tool: 'bash', arguments: { command: 'echo okay' }, cwd: '测试项目', scope: 'shell' };
+    const t = terminal({ busy: true, approval });
+    try {
+      await vi.waitFor(() => expect(t.raw).toHaveBeenCalledWith(true));
+      t.input.write('\u001b[200~y\r\u001b[201~');
+      await new Promise(resolve => setImmediate(resolve));
+      expect(t.onApproval).not.toHaveBeenCalled();
+      t.input.write('y');
+      await vi.waitFor(() => expect(t.onApproval).toHaveBeenCalledExactlyOnceWith('approval-paste', true));
     } finally { t.app.unmount(); t.app.cleanup(); }
   });
   it('cancels active execution with Ctrl+C instead of exiting', async () => {

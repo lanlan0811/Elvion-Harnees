@@ -12,6 +12,8 @@ const result = await tools.execute(call, {
 
 审批回调只能由用户交互适配层提供。缺少回调时需审批的调用返回 `approval_required`；拒绝、取消和 ID 不匹配均不执行。`ask` 审批全部工具；`auto-edit` 允许工作区文件读写、搜索、Todo 和 Git 只读，Shell、Git 写入及工作区外访问逐次审批；`full-access` 免审批，仍执行 Schema、超时、取消、限长与审计。模型参数没有权限升级字段。
 
+审批请求的 `workspace` 保留工作区身份，`cwd` 是工具完成路径校验后的实际工作目录，`scope` 是规范化后的影响范围。`cwd` 为兼容旧请求保持可选；当前 Tool Runtime 始终提供，旧请求的展示与审计回退到 `workspace`。
+
 | 工具 | 输入要点 | 结果与限制 |
 |---|---|---|
 | `read_file` | `path`, `startLine?`, `endLine?` | UTF-8、原始 CRLF、1-based 范围、SHA-256；拒绝二进制/无效编码/大文件 |
@@ -27,7 +29,7 @@ const result = await tools.execute(call, {
 
 所有完整 Schema 由 `descriptors()` 暴露，`inputSchemas` 同步导出。文件上限默认 2 MB，输出默认 32,000 字符。搜索默认排除 `.git`、`node_modules`、`.elvion`、`.codex`、`dist`、`coverage`、`.cache`。补丁不支持重命名、二进制、带引号路径或混合行尾；此类修改使用精确文件编辑。
 
-Git 写入需要显式 `paths`，且目标必须由当前 Runtime 从干净 Git 基线修改，之后内容仍与工具记录一致；存在不相关暂存改动时拒绝提交。原有用户改动可以经文件工具编辑，但不会自动暂存或提交。文件工具禁止直接写 `.git` 元数据。
+Git 写入需要显式 `paths`，且目标必须由当前 Runtime 从干净 Git 基线修改，之后内容仍与工具记录一致；存在不相关暂存改动时拒绝提交。所有路径按字面量传给 Git，`[]` 等合法文件名不扩展为通配路径；子目录调用也从仓库根核对全部暂存文件，不受 `diff.relative` 配置影响。原有用户改动可以经文件工具编辑，但不会自动暂存或提交。文件工具禁止直接写 `.git` 元数据。
 
 Windows Shell 由固定 PowerShell/C# 监督器在 `CREATE_SUSPENDED` 后绑定 `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`，再恢复线程。超时或取消关闭监督器，从而终止后代进程；没有通过字符串拼接执行目标 argv。监督器编译和 Bash 初始化共享最多 30 秒启动预算；Bash 发出本次调用随机就绪标记后，开始计算用户命令超时，标记从 stderr 移除。Windows 上依赖系统 PowerShell、允许 Add-Type 和 Windows Job Object；失败返回实际失败信息。Git Bash 支持构造参数、`ELVION_BASH_PATH` 及标准安装路径。其它平台使用独立进程组。
 

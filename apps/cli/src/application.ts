@@ -5,21 +5,20 @@ import { ProviderConfigSchema, ProviderRuntime, loadProviderConfigs, saveProvide
 import { SessionRepository, defaultDataDirectory, type SessionSnapshot } from '@elvion/session';
 import { ToolRuntime, findGitBash } from '@elvion/tool';
 import { executeTask } from '@elvion/execution';
-import { ElvionError, EventSequencer, PermissionModeSchema, serializeError, type ApprovalHandler, type EventEnvelope, type JsonValue, type PermissionMode } from '@elvion/kernel';
+import { ElvionError, EventSequencer, PermissionModeSchema, serializeError, type ApprovalHandler, type EventEnvelope, type PermissionMode } from '@elvion/kernel';
 import { parseArguments, HELP } from './arguments.js';
-import type { UiMessage } from './ui/types.js';
 import { cleanText } from './ui/text.js';
+export { appendAssistantText, appendUiMessage, MAX_UI_MESSAGE_CHARACTERS, MAX_UI_MESSAGES } from './presentation.js';
 import packageInfo from '../package.json' with { type: 'json' };
 export const VERSION=packageInfo.version;
 export interface ApplicationSettings {dataDirectory:string;workspace:string;providers:ProviderConfig[]}
-export const MAX_UI_MESSAGES=500;
-export const MAX_UI_MESSAGE_CHARACTERS=32_000;
-const omitted='\n[Earlier output omitted from display; use the persisted event log for evidence.]\n';
-function boundedMessageText(text:string):string{const safe=cleanText(text);return safe.length<=MAX_UI_MESSAGE_CHARACTERS?safe:omitted+safe.slice(-(MAX_UI_MESSAGE_CHARACTERS-omitted.length));}
-export function appendUiMessage(messages:readonly UiMessage[],message:UiMessage):UiMessage[]{return [...messages.slice(-(MAX_UI_MESSAGES-1)),{...message,text:boundedMessageText(message.text)}];}
-export function appendAssistantText(messages:readonly UiMessage[],id:string,text:string):UiMessage[]{
-  if(!messages.some(message=>message.id===id))return appendUiMessage(messages,{id,kind:'assistant',text});
-  return messages.slice(-MAX_UI_MESSAGES).map(message=>message.id===id?{...message,text:boundedMessageText(message.text+text)}:message);
+export function tuiExecutionSettings(settings:ApplicationSettings,session?:SessionSnapshot):ApplicationSettings{return session?{...settings,workspace:session.workspace}:settings;}
+export async function resumeTuiSession(settings:ApplicationSettings,id:string,callbacks:{onLoaded:(session:SessionSnapshot,history:EventEnvelope[])=>void;continueExecution:(session:SessionSnapshot)=>Promise<number|void>}):Promise<number|void>{
+  const repository=await SessionRepository.open(join(settings.dataDirectory,'sessions.sqlite'));
+  let session:SessionSnapshot;let history:EventEnvelope[];
+  try{const saved=await repository.get(id);if(!saved)throw new ElvionError('not_found','Session not found');session=saved;history=await repository.events(id);}finally{await repository.close();}
+  callbacks.onLoaded(session,history);
+  return await callbacks.continueExecution(session);
 }
 /** Credential values are never valid provider configuration, even inside a permitted text field. */
 function rejectInlineCredentials(input:unknown):void{
@@ -78,11 +77,15 @@ export function selectProvider(settings:ApplicationSettings,id?:string):Provider
 }
 export function exitCode(type:string):number{return type==='execution.completed'?0:type==='execution.approval_required'?3:type==='execution.timed_out'?124:type==='execution.cancelled'?130:1;}
 export async function runExecution(settings:ApplicationSettings,options:{task:string;providerId?:string;permissions?:string;signal:AbortSignal;approve?:ApprovalHandler;session?:SessionSnapshot;onEvent:(event:EventEnvelope)=>void|Promise<void>}):Promise<number>{
-  const provider=selectProvider(settings,options.session?.providerId??options.providerId);
+  const completed=options.session?.state==='completed';
+  const provider=completed?settings.providers.find(provider=>provider.id===options.session?.providerId):selectProvider(settings,options.session?.providerId??options.providerId);
+  const providerId=options.session?.providerId??provider!.id;
+  const model=completed?options.session?.checkpoint?.model??provider?.model??'saved-session':provider!.model;
+  const runtime=completed?{stream(){return{[Symbol.asyncIterator](){return{async next():Promise<never>{throw new ElvionError('invalid_state','Completed sessions must not request a model');}};}};}}:new ProviderRuntime(provider!);
   const repository=await SessionRepository.open(join(settings.dataDirectory,'sessions.sqlite'));
   let code=1;
   try{
-    for await(const event of executeTask({task:options.task,workspace:options.session?.workspace??settings.workspace,providerId:provider.id,model:provider.model,runtime:new ProviderRuntime(provider),repository,signal:options.signal,tools:new ToolRuntime(),lockDirectory:join(settings.dataDirectory,'locks'),...(options.permissions?{permissions:PermissionModeSchema.parse(options.permissions)}:{}),...(options.approve?{approve:options.approve}:{}),...(options.session?{session:options.session}:{})})){await options.onEvent(event);if(event.type.startsWith('execution.'))code=exitCode(event.type);}
+    for await(const event of executeTask({task:options.task,workspace:options.session?.workspace??settings.workspace,providerId,model,runtime,repository,signal:options.signal,tools:new ToolRuntime(),lockDirectory:join(settings.dataDirectory,'locks'),...(options.permissions?{permissions:PermissionModeSchema.parse(options.permissions)}:{}),...(options.approve?{approve:options.approve}:{}),...(options.session?{session:options.session}:{})})){await options.onEvent(event);if(event.type.startsWith('execution.'))code=exitCode(event.type);}
   }finally{await repository.close();}
   return code;
 }
@@ -124,21 +127,9 @@ export async function main(args:string[],startTui:(settings:ApplicationSettings,
     try{
       session=await repository.get(id);
       if(!session)throw new ElvionError('not_found','Session not found');
-      const history=await repository.events(id);const pending=new Set<string>();
-      for(const event of history){const payload=event.payload;if(payload===null||typeof payload!=='object'||Array.isArray(payload))continue;if(event.type==='tool.started'&&typeof payload['id']==='string')pending.add(payload['id']);if(event.type==='tool.finished'&&typeof payload['toolCallId']==='string')pending.delete(payload['toolCallId']);}
-      const uncertain=pending.size>0||['running','awaiting_approval','verifying','recovering','needs_review'].includes(session.state);
-      const sequence=new EventSequencer({sessionId:session.id,executionId:randomUUID(),nextSequence:session.lastSequence+1});
-      const restored=sequence.next('session.restored',{state:session.state,permissions:session.permissions,workspace:session.workspace,replayed:false});
-      const terminal=uncertain?'execution.needs_review':`execution.${session.state}`;
-      const previous=[...history].reverse().find(event=>event.type===terminal);
-      const final=sequence.next(terminal,previous?.payload??{reason:uncertain?'Inspect uncertain previous operations before starting a new task. Automatic replay is disabled.':'Saved conversation restored. Submit a new task through the TUI or elvion run.'} as JsonValue);
-      const snapshot={...session,...(uncertain?{state:'needs_review' as const}:{}),lastSequence:final.sequence,updatedAt:final.timestamp};
-      await repository.save(snapshot,[restored,final]);
-      if(json){output(restored);output(final);}else output({sessionId:session.id,state:snapshot.state,permissions:session.permissions,replayed:false,report:previous?.payload??null});
-      return exitCode(terminal);
     }finally{await repository.close();}
   }else if(command!=='run')throw new ElvionError('configuration_error','Unknown command. Use --help.');
-  const task=positionals[1]?.trim()??'';
+  const task=session?.task??positionals[1]?.trim()??'';
   if(!task)throw new ElvionError('configuration_error','A task is required');
   const cancellation=new AbortController();const cancel=():void=>cancellation.abort(new ElvionError('cancelled','User cancelled'));process.on('SIGINT',cancel);
   try{return await runExecution(settings,{task,signal:cancellation.signal,...(session?{session}:{}),...(typeof flags['provider']==='string'?{providerId:flags['provider']}:{}),...(typeof flags['permissions']==='string'?{permissions:flags['permissions']}:{}),onEvent:event=>{if(json)output(event);else if(event.type==='model.text'&&typeof event.payload==='object'&&event.payload!==null&&!Array.isArray(event.payload)&&typeof event.payload['text']==='string')process.stdout.write(event.payload['text']);else process.stderr.write(`${event.type} ${JSON.stringify(event.payload)}\n`);}});}finally{process.removeListener('SIGINT',cancel);}

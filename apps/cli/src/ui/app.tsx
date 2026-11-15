@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Box, Text, useApp, useInput, useStdout } from 'ink';
-import { buildWelcomeFrame, gradientColor, noColor, PALETTE } from './layout.js';
+import { buildWelcomeFrame, frameGeometry, gradientColor, noColor, PALETTE } from './layout.js';
 import type { FrameLine, Tone } from './layout.js';
 import { messageViewport } from './messages.js';
 import { parseSubmission, transitionInput } from './input.js';
@@ -67,11 +67,20 @@ export function ElvionApp(props: ElvionAppProps) {
   const [localError, setLocalError] = useState('');
   const [approvalSent, setApprovalSent] = useState<string>();
   const [approvalScroll, setApprovalScroll] = useState(0);
-  const bodyHeight = Math.max(0, size.rows - 8);
+  const [overlayScroll, setOverlayScroll] = useState(0);
+  const previousLineCount = useRef(0);
+  const geometry = frameGeometry(size.rows);
+  const bodyHeight = geometry.bodyRows;
   const hasConversation = props.messages.length > 0;
   const viewport = useMemo(() => messageViewport(props.messages, size.columns, bodyHeight, scroll), [props.messages, size.columns, bodyHeight, scroll]);
   useEffect(() => { approvedRef.current = undefined; setApprovalSent(undefined); setApprovalScroll(0); }, [props.approval?.id]);
-  useEffect(() => { if (!props.busy) setScroll(0); }, [props.busy]);
+  useEffect(() => {
+    const added = viewport.totalLines - previousLineCount.current;
+    previousLineCount.current = viewport.totalLines;
+    if (added > 0) setScroll(current => current > 0 ? current + added : 0);
+  }, [props.messages, size.columns, viewport.totalLines]);
+  useEffect(() => setOverlayScroll(0), [props.overlay]);
+  useEffect(() => { if (props.messages.length === 0) setScroll(0); }, [props.messages.length]);
 
   useInput((value, key) => {
     if (value === '[200~') { pasteRef.current = true; return; }
@@ -93,7 +102,11 @@ export function ElvionApp(props: ElvionAppProps) {
       return;
     }
     if (next.effect === 'escape') { props.onCloseOverlay?.(); setLocalError(''); return; }
-    if (props.overlay) return;
+    if (props.overlay) {
+      if (next.effect === 'scroll-up' || key.upArrow) setOverlayScroll(current => Math.max(0, current - Math.max(1, bodyHeight - 2)));
+      if (next.effect === 'scroll-down' || key.downArrow) setOverlayScroll(current => current + Math.max(1, bodyHeight - 2));
+      return;
+    }
     if (next.effect === 'scroll-up') { setScroll(current => current + Math.max(1, bodyHeight - 1)); return; }
     if (next.effect === 'scroll-down') { setScroll(current => Math.max(0, current - Math.max(1, bodyHeight - 1))); return; }
     if (next.effect !== 'submit') { inputRef.current = next.state; setInput(next.state); return; }
@@ -113,7 +126,9 @@ export function ElvionApp(props: ElvionAppProps) {
     body = all.slice(start, start + Math.max(0, bodyHeight - 1));
     if (bodyHeight > 0) body.push(line(approvalSent ? '正在记录审批结果…' : '[Y] 仅批准本次  [N / Esc] 拒绝  [↑ ↓] 查看参数', 'warning'));
   } else if (props.overlay) {
-    body = [line(props.overlay.title, 'brand'), ...props.overlay.lines.flatMap(value => wrapText(value, size.columns).map(value => line(value))), line('Esc 返回', 'muted')].slice(0, bodyHeight);
+    const content = props.overlay.lines.flatMap(value => wrapText(value, size.columns).map(value => line(value)));
+    const height = Math.max(0, bodyHeight - 2); const start = Math.min(overlayScroll, Math.max(0, content.length - height));
+    body = [line(props.overlay.title, 'brand'), ...content.slice(start, start + height), line('PgUp/PgDn 滚动 · Esc 返回', 'muted')].slice(0, bodyHeight);
   } else if (hasConversation) { body = viewport.lines; }
   else { body = buildWelcomeFrame({ ...size, assets: props.assets, health: props.health, version: props.version }); }
   while (body.length < bodyHeight) body.push(line());
@@ -122,6 +137,6 @@ export function ElvionApp(props: ElvionAppProps) {
   const headerText = pad(header, Math.max(0, size.columns - cellWidth(version))) + truncate(version, size.columns);
   const status = `${permissionLabels[props.permissionMode]} | ${props.model ?? '未配置模型'} | ${props.workspace}`;
   const footer = localError || (viewport.offset > 0 ? `历史记录 · 距底部 ${viewport.offset} 行 · PgDn 向下` : 'Enter 发送 · Ctrl+J 换行 · PgUp/PgDn 滚动 · /help');
-  const frame = [line(truncate(headerText, size.columns), 'muted'), line(), ...body, line('─'.repeat(size.columns), 'muted'), ...inputLines(input, size.columns), line(truncate(footer, size.columns), localError ? 'error' : 'muted'), line(truncate(status, size.columns), props.permissionMode === 'full-access' ? 'warning' : 'muted')];
+  const frame = [...(geometry.headerRows ? [line(truncate(headerText, size.columns), 'muted'), line()] : []), ...body, ...(geometry.separatorRows ? [line('─'.repeat(size.columns), 'muted')] : []), ...inputLines(input, size.columns, geometry.inputRows), ...(geometry.footerRows ? [line(truncate(footer, size.columns), localError ? 'error' : 'muted')] : []), ...(geometry.statusRows ? [line(truncate(status, size.columns), props.permissionMode === 'full-access' ? 'warning' : 'muted')] : [])];
   return <Box width={size.columns} height={size.rows} flexDirection='column' overflow='hidden'>{frame.slice(0, size.rows).map((value, index) => <RenderLine key={index} value={value} columns={size.columns} color={color} />)}</Box>;
 }

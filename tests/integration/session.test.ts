@@ -63,11 +63,22 @@ describe('worker SQLite session transactions', () => {
   it('rejects identity changes, malformed records and requests after close', async () => {
     const repository = await openRepository(); const state = snapshot(); await repository.save(state);
     await expect(repository.save({ ...state, workspace: join(directory, 'different') })).rejects.toMatchObject({ code: 'storage_error' });
+    await expect(repository.save({ ...state, providerId: 'different-provider' })).rejects.toMatchObject({ code: 'storage_error' });
+    await expect(repository.save({ ...state, task: 'injected task' })).rejects.toMatchObject({ code: 'storage_error' });
+    await expect(repository.save({ ...state, permissions: 'full-access' })).rejects.toMatchObject({ code: 'storage_error' });
+    expect(await repository.get(state.id)).toEqual(state);
     expect(SessionSnapshotSchema.safeParse({ ...state, schemaVersion: 999 }).success).toBe(false);
     expect(SessionSnapshotSchema.safeParse({ ...state, permissions: 'root' }).success).toBe(false);
     expect(await repository.get(randomUUID())).toBeUndefined();
     await repository.close();
     await expect(repository.get(state.id)).rejects.toMatchObject({ code: 'storage_error' });
+  });
+  it('allows permission changes only with the correlated explicit user audit event', async () => {
+    const repository = await openRepository(); const state = snapshot(); await repository.save(state);
+    const event = new EventSequencer({ sessionId: state.id }).next('session.permissions_changed', { previous: 'ask', permissions: 'auto-edit', source: 'user' });
+    await repository.save({ ...state, permissions: 'auto-edit', lastSequence: event.sequence, updatedAt: event.timestamp }, [event]);
+    expect((await repository.get(state.id))?.permissions).toBe('auto-edit');
+    expect(await repository.events(state.id)).toEqual([event]);
   });
   it('closes concurrently without accepting writes after close begins', async () => {
     const repository = await openRepository(); const state = snapshot(); await repository.save(state);

@@ -65,14 +65,16 @@ export class CancellationScope {
 
 /** Stop awaiting on cancellation. The caller still owns stopping the underlying side effect. */
 export async function raceWithSignal<T>(operation: Promise<T>, signal: AbortSignal): Promise<T> {
-  throwIfAborted(signal);
   let listener: (() => void) | undefined;
   const cancelled = new Promise<never>((_resolve, reject) => {
     listener = () => reject(cancellationReason(signal));
-    signal.addEventListener('abort', listener, { once: true });
+    if (signal.aborted) listener();
+    else signal.addEventListener('abort', listener, { once: true });
   });
   try {
-    return await Promise.race([operation, cancelled]);
+    // The operation already exists: always attach a rejection handler, including when its
+    // callback synchronously aborted the signal before returning a rejected promise.
+    return await Promise.race([cancelled, operation]);
   } finally {
     if (listener) signal.removeEventListener('abort', listener);
   }

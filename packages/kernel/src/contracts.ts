@@ -25,6 +25,7 @@ export const ApprovalRequestSchema = z.strictObject({
   id: IdentifierSchema,
   toolCall: ToolCallSchema,
   workspace: z.string().min(1),
+  cwd: z.string().min(1).optional(),
   summary: z.string().min(1),
   scope: z.array(z.string()).min(1),
 });

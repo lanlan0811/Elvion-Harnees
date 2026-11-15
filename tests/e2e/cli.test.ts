@@ -5,6 +5,7 @@ import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { once } from 'node:events';
+import { pathToFileURL } from 'node:url';
 import { EventEnvelopeSchema, type EventEnvelope } from '../../packages/kernel/src/index.js';
 import { cancelWindowsCli } from './windows-console.js';
 
@@ -18,9 +19,9 @@ afterEach(async () => {
   await rm(temporary, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
 });
 interface CliResult { code: number | null; signal: NodeJS.Signals | null; stdout: string; stderr: string }
-function start(args: string[], onOutput?: (chunk: string) => void): { child: ChildProcess; result: Promise<CliResult> } {
+function startProgram(entry: string, args: string[], onOutput?: (chunk: string) => void): { child: ChildProcess; result: Promise<CliResult> } {
   const env = { ...process.env, ELVION_DATA_DIR: dataDirectory, NODE_NO_WARNINGS: '1', NO_COLOR: '1' };
-  const child = spawn(process.execPath, [cli, ...args, '--workspace', workspace], { cwd: workspace, env, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+  const child = spawn(process.execPath, [entry, ...args], { cwd: workspace, env, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
   active.add(child);
   const result = new Promise<CliResult>((fulfill, reject) => {
     let stdout = ''; let stderr = '';
@@ -32,6 +33,7 @@ function start(args: string[], onOutput?: (chunk: string) => void): { child: Chi
   });
   return { child, result };
 }
+function start(args: string[], onOutput?: (chunk: string) => void): { child: ChildProcess; result: Promise<CliResult> } { return startProgram(cli, [...args, '--workspace', workspace], onOutput); }
 async function run(args: string[]): Promise<CliResult> { return start(args).result; }
 function events(result: CliResult): EventEnvelope[] {
   expect(result.signal).toBeNull();
@@ -67,6 +69,42 @@ async function stream(response: ServerResponse, value: { text: string } | { call
 }
 
 describe('actual built CLI subprocess', { timeout: 90_000 }, () => {
+  it('continues a durable checkpoint from an exited Node child in a separate CLI process', async () => {
+    await writeFile(join(workspace, 'package.json'), JSON.stringify({ type: 'module', scripts: { test: 'node check.mjs' } }));
+    await writeFile(join(workspace, 'check.mjs'), `import assert from 'node:assert/strict';\nimport { appendFileSync, existsSync, readFileSync } from 'node:fs';\nassert.equal(readFileSync('first.mjs','utf8'),'export const first = 1;\\n');\nif(existsSync('second.mjs'))assert.equal(readFileSync('second.mjs','utf8'),'export const second = 2;\\n');\nappendFileSync('verification.log','verified\\n');\nconsole.log('checkpoint-real-verification');\n`);
+    let requests = 0; const bodies: Record<string, unknown>[] = [];
+    await fixture(async (body, response) => {
+      bodies.push(body); requests++;
+      if (!Array.isArray(body['tools'])) throw new Error('Restored task must not replan');
+      if (requests === 1) return stream(response, { calls: [{ id: 'first-write', name: 'write_file', arguments: { path: 'first.mjs', content: 'export const first = 1;\n' } }] });
+      if (requests === 3) return stream(response, { calls: [{ id: 'second-write', name: 'write_file', arguments: { path: 'second.mjs', content: 'export const second = 2;\n' } }] });
+      return stream(response, { text: 'Independent checkpoint increment delivered.' });
+    });
+    const childFile = join(temporary, 'checkpoint-child.mjs');
+    const moduleUrl = (name: string): string => pathToFileURL(resolve('dist/packages', name, 'index.js')).href;
+    await writeFile(childFile, `import {readFile} from 'node:fs/promises';\nimport {join} from 'node:path';\nimport {executeTask} from ${JSON.stringify(moduleUrl('execution'))};\nimport {SessionRepository} from ${JSON.stringify(moduleUrl('session'))};\nimport {ProviderRuntime} from ${JSON.stringify(moduleUrl('model'))};\nconst workspace=process.argv[2],data=process.argv[3];\nconst provider=JSON.parse(await readFile(join(data,'providers.json'),'utf8')).providers[0];\nconst repository=await SessionRepository.open(join(data,'sessions.sqlite'));\ntry{for await(const event of executeTask({task:'Original durable cross-file goal',workspace,providerId:provider.id,model:provider.model,runtime:new ProviderRuntime(provider),repository,permissions:'full-access',signal:new AbortController().signal,lockDirectory:join(data,'locks'),plan:[{id:'first',title:'First independent increment',dependsOn:[],acceptance:['Original npm test passes']},{id:'second',title:'Second dependent increment',dependsOn:['first'],acceptance:['Original npm test passes']}]})){process.stdout.write(JSON.stringify(event)+'\\n');if(event.type==='task.completed'&&event.payload.taskId==='first')break;}}finally{await repository.close();}\n`);
+    const first = await startProgram(childFile, [workspace, dataDirectory]).result;
+    expect(first.code, first.stdout + first.stderr).toBe(0); const before = events(first);
+    expect(before.at(-1)?.type).toBe('task.completed'); expect(requests).toBe(2);
+    expect(await readFile(join(workspace, 'first.mjs'), 'utf8')).toBe('export const first = 1;\n');
+    await expect(readFile(join(workspace, 'second.mjs'))).rejects.toMatchObject({ code: 'ENOENT' });
+    const savedList = JSON.parse((await run(['sessions', 'list', '--json'])).stdout) as { id: string; state: string }[];
+    expect(savedList).toHaveLength(1);
+    const resumed = await run(['resume', savedList[0]!.id, '--json']);
+    expect(resumed.code, resumed.stdout + resumed.stderr).toBe(0); const after = events(resumed);
+    expect(after[0]?.sequence).toBe(before.at(-1)!.sequence + 1); expect(after.at(-1)?.type).toBe('execution.completed');
+    expect(after.some(event => event.type === 'execution.resumed')).toBe(true);
+    expect(after.some(event => event.type === 'task.planning' || event.type === 'task.planned')).toBe(false);
+    expect(after.filter(event => event.type === 'task.started').map(event => event.payload)).toMatchObject([{ task: { id: 'second' } }]);
+    expect(requests).toBe(4); expect(JSON.stringify(bodies.slice(2))).toContain('Original durable cross-file goal');
+    expect(await readFile(join(workspace, 'first.mjs'), 'utf8')).toBe('export const first = 1;\n');
+    expect(await readFile(join(workspace, 'second.mjs'), 'utf8')).toBe('export const second = 2;\n');
+    expect((await readFile(join(workspace, 'verification.log'), 'utf8')).trim().split('\n')).toEqual(['verified', 'verified']);
+    expect(after.filter(event => event.type === 'tool.started' && JSON.stringify(event.payload).includes('first.mjs'))).toHaveLength(0);
+    const last = after.at(-1)!.payload as { budget: { turns: number; toolCalls: number }; tasks: { status: string }[] };
+    expect(last.budget.turns).toBe(4); expect(last.budget.toolCalls).toBeGreaterThan(4); expect(last.tasks.every(task => task.status === 'completed')).toBe(true);
+    expect(JSON.stringify(after.find(event => event.type === 'verification.finished')?.payload)).toContain('checkpoint-real-verification');
+  });
   it('prints version/help and keeps configuration failures as valid JSON with exit 2', async () => {
     const version = await run(['--version']); expect(version.code).toBe(0); expect(version.stdout.trim()).toBe('0.1.0');
     const help = await run(['--help']); expect(help.code).toBe(0); expect(help.stdout).toContain('elvion run');

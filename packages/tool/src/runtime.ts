@@ -71,7 +71,7 @@ export class ToolRuntime {
       await this.audit({ id: auditId, toolCallId: call.id, tool: call.name, phase: 'started', timestamp: new Date().toISOString(), scope });
       const requiresApproval = context.permissionMode === 'ask' || (context.permissionMode === 'auto-edit' && (prepared.outside || name === 'bash' || (name === 'git' && ['init', 'add', 'commit'].includes(String(input['operation'])))));
       if (requiresApproval) {
-        const approval: ApprovalRequest = { id: randomUUID(), toolCall: call, workspace: prepared.workspace, summary: createRedactor()(`${name}: ${JSON.stringify(call.arguments).slice(0, 1_000)}`), scope };
+        const approval: ApprovalRequest = { id: randomUUID(), toolCall: call, workspace: prepared.workspace, cwd: prepared.cwd, summary: createRedactor()(`${name}: ${JSON.stringify(call.arguments).slice(0, 1_000)}`), scope };
         if (!context.approve) result = { ...base(), status: 'approval_required', approval };
         else {
           const decision = await this.awaitApproval(context.approve, approval, context.signal);
