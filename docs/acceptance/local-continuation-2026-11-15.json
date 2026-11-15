@@ -6,13 +6,18 @@
   "quality": {
     "command": "pnpm check",
     "exitCode": 0,
-    "testStartLocalTime": "18:20:15",
-    "testDurationSeconds": 112.9,
+    "testStartLocalTime": "18:38:03",
+    "testDurationSeconds": 108.99,
     "testFilesPassed": 21,
-    "testsPassed": 283,
+    "testsPassed": 284,
     "testsSkipped": 1,
     "skipReason": "Non-Windows SIGINT case; Windows-specific console cancellation is exercised separately",
-    "stagesPassed": ["lint", "workspace and test typecheck", "unit/integration/e2e", "build"]
+    "stagesPassed": [
+      "lint",
+      "workspace and test typecheck",
+      "unit/integration/e2e",
+      "build"
+    ]
   },
   "installedPackage": {
     "command": "pnpm smoke:package",
@@ -22,7 +27,10 @@
     "generatedBinExercised": true,
     "codingRequests": 5,
     "toolCalls": 15,
-    "engineVerificationExitCodes": [1, 0],
+    "engineVerificationExitCodes": [
+      1,
+      0
+    ],
     "externalProjectTestExitCode": 0,
     "originalScriptsAndAssertionsPreserved": true,
     "sqliteEventsMatchOutput": true,
@@ -33,7 +41,13 @@
     "environment": "Windows ConPTY, stdin/stdout isTTY=true",
     "columns": 80,
     "rows": 24,
-    "observed": ["welcome", "help and Escape", "Chinese two-line bracketed paste without submission", "idle Ctrl+C exit 0", "cursor and paste mode restored"],
+    "observed": [
+      "welcome",
+      "help and Escape",
+      "Chinese two-line bracketed paste without submission",
+      "idle Ctrl+C exit 0",
+      "cursor and paste mode restored"
+    ],
     "isFormalWindowsTerminalAcceptance": false
   },
   "outstanding": [
@@ -41,5 +55,6 @@
     "User deferred remaining real provider protocol configurations; they remain unaccepted",
     "User will perform formal Windows Terminal visual, IME and full PTY matrix acceptance using docs/windows-terminal-acceptance.md"
   ],
-  "releaseCreated": false
+  "releaseCreated": false,
+  "postCiFixtureFix": "Windows reserved-port EACCES: OS-assigned loopback port and cleanup lifecycle regression; all protocol assertions preserved"
 }

@@ -1,6 +1,6 @@
 import { createServer, type Server } from 'node:http';
 import { once } from 'node:events';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { serializeError, type ModelEvent, type ModelMessage, type ToolCall } from '@elvion/kernel';
 import { ProviderRuntime, probeProvider, type ProviderConfig } from '../src/index.js';
 
@@ -12,6 +12,16 @@ const callA: ToolCall = { id: 'call-a', name: 'read_file', arguments: { path: 'ä
 const callB: ToolCall = { id: 'call-b', name: 'glob', arguments: { pattern: '*.ts' } };
 const messages: ModelMessage[] = [{ role: 'system', content: 'Be helpful.' }, { role: 'user', content: 'Read files.' }];
 type Protocol = ProviderConfig['protocol'];
+
+async function listenFixture(server: Server): Promise<number> {
+  server.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  // Only a successfully listening server belongs to afterEach cleanup.
+  servers.push(server);
+  const address = server.address();
+  if (!address || typeof address === 'string' || address.address !== '127.0.0.1' || address.port < 1024) throw new Error('Missing safe fixture address');
+  return address.port;
+}
 
 async function fixture(protocol: Protocol, responses: { body: string; status?: number; hang?: boolean }[]) {
   const requests: { path: string; body: Record<string, unknown>; auth: string | undefined; key: string | undefined }[] = [];
@@ -30,21 +40,8 @@ async function fixture(protocol: Protocol, responses: { body: string; status?: n
     }
     if (!item.hang) response.end();
   });
-  servers.push(server);
-  let address: ReturnType<Server['address']> = null;
-  for (let attempt = 0; attempt < 20; attempt += 1) {
-    server.listen(20_000 + Math.floor(Math.random() * 30_000), '127.0.0.1');
-    try {
-      await once(server, 'listening');
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'EADDRINUSE') continue;
-      throw error;
-    }
-    address = server.address();
-    break;
-  }
-  if (!address || typeof address === 'string' || address.port < 11_000) throw new Error('Missing safe fixture address');
-  const config: ProviderConfig = { id: 'test', name: 'Test', model: 'test-model', protocol, baseUrl: 'http://127.0.0.1:' + address.port, apiKeyEnv: 'TEST_MODEL_KEY', capabilities: { tools: true } };
+  const port = await listenFixture(server);
+  const config: ProviderConfig = { id: 'test', name: 'Test', model: 'test-model', protocol, baseUrl: 'http://127.0.0.1:' + port, apiKeyEnv: 'TEST_MODEL_KEY', capabilities: { tools: true } };
   return { config, requests, runtime: new ProviderRuntime(config, { env: { TEST_MODEL_KEY: 'test-credential' } }) };
 }
 
@@ -53,6 +50,21 @@ afterEach(async () => {
     server.closeAllConnections();
     await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
   }));
+});
+
+describe('HTTP fixture listener lifecycle', () => {
+  it('preserves an asynchronous listen failure without registering a server that never started', async () => {
+    const server = createServer();
+    const originalListening = server.listeners('listening'); const originalErrors = server.listeners('error');
+    const failure = Object.assign(new Error('Injected reserved-port denial'), { code: 'EACCES' });
+    const close = vi.spyOn(server, 'close');
+    const listen = vi.spyOn(server, 'listen').mockImplementation(() => { queueMicrotask(() => server.emit('error', failure)); return server; });
+    await expect(listenFixture(server)).rejects.toBe(failure);
+    expect(listen).toHaveBeenCalledExactlyOnceWith(0, '127.0.0.1');
+    expect(servers).not.toContain(server); expect(close).not.toHaveBeenCalled();
+    expect(server.listening).toBe(false); expect(server.address()).toBeNull();
+    expect(server.listeners('listening')).toEqual(originalListening); expect(server.listeners('error')).toEqual(originalErrors);
+  });
 });
 
 async function collect(runtime: ProviderRuntime, input = messages, options = { signal: signal() }): Promise<ModelEvent[]> {
