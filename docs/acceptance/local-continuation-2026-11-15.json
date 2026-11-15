@@ -51,10 +51,19 @@
     "isFormalWindowsTerminalAcceptance": false
   },
   "outstanding": [
-    "Exact final commit Windows and Ubuntu CI is recorded separately after push",
     "User deferred remaining real provider protocol configurations; they remain unaccepted",
     "User will perform formal Windows Terminal visual, IME and full PTY matrix acceptance using docs/windows-terminal-acceptance.md"
   ],
   "releaseCreated": false,
-  "postCiFixtureFix": "Windows reserved-port EACCES: OS-assigned loopback port and cleanup lifecycle regression; all protocol assertions preserved"
+  "postCiFixtureFix": "Windows reserved-port EACCES: OS-assigned loopback port and cleanup lifecycle regression; all protocol assertions preserved",
+  "exactCommitCi": {
+    "sha": "ca86ca5e7457c97c626fcbbf042fa69f58d18009",
+    "runId": 43705292641,
+    "conclusion": "success",
+    "platforms": [
+      "windows-latest",
+      "ubuntu-latest"
+    ],
+    "evidence": "ci-continuation-2026-11-15.json"
+  }
 }

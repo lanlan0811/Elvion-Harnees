@@ -10,20 +10,20 @@
 
 最终第二次 **pnpm smoke:package 实际 exit 0**：实际 pack/install 后经生成 bin 完成 5 次编码请求、15 次工具调用；引擎独立验证先 exit 1、修复后 exit 0，外部项目 npm 测试 exit 0。原脚本与测试断言保留，SQLite 逐事件与输出一致，两次 resume 均未重放已完成工作。模型为本地 HTTP 服务，仅证明本地协议、真实工具与独立安装产物链路，不冒充真实供应商验收。
 
-本轮结构化证据见 [local-continuation-2026-11-15.json](acceptance/local-continuation-2026-11-15.json)。本轮生产代码已提交并 Push：**ef6ea5b945d1fe4c4d65673f5a35a660f63a843f**。其 CI 运行 43704103222 的 Ubuntu 完整检查及安装包验收通过，Windows 模型 HTTP 测试夹具因随机端口命中保留区而失败，后续安装检查未执行；已定位并修复测试监听及清理逻辑，修复提交的双平台 CI 仍需重新核实。历史提交 0888342 的成功 CI 不能代表本轮。未创建正式 Release，未推送发布 Tag。
+本轮结构化证据见 [local-continuation-2026-11-15.json](acceptance/local-continuation-2026-11-15.json)。本轮生产代码已提交并 Push：**ef6ea5b945d1fe4c4d65673f5a35a660f63a843f**。其 CI 运行 43704103222 的 Ubuntu 完整检查及安装包验收通过，Windows 模型 HTTP 测试夹具因随机端口命中保留区而失败，后续安装检查未执行；已修复测试监听及清理逻辑。修复提交 **ca86ca5e7457c97c626fcbbf042fa69f58d18009** 的 CI **43705292641** 已 completed/success，Windows 与 Ubuntu 的 frozen install、完整 Check、安装产物编码验收全部通过，见 [双平台结果](acceptance/ci-continuation-2026-11-15.json)。历史提交 0888342 的成功 CI 不能代表本轮。未创建正式 Release，未推送发布 Tag。
 
 ## M0–M7 需求核对
 
 | 里程碑 | 当前实现 | 已取得证据 | 尚待验收或明确边界 |
 | --- | --- | --- | --- |
-| M0：工程与契约 | pnpm Workspace、Node.js 24/ESM、严格 TypeScript、Zod 运行时校验、Kernel 事件/错误/取消/预算、模块包、质量脚本与 CI | 本轮 Lint、全部包及测试类型检查、21 文件/284 项测试与 Build 通过；同步 abort 后拒绝 Promise 的未处理拒绝已复现并回归 | 本轮精确最终 SHA 的 Windows/Ubuntu 远端 CI 待 Push 后实测 |
+| M0：工程与契约 | pnpm Workspace、Node.js 24/ESM、严格 TypeScript、Zod 运行时校验、Kernel 事件/错误/取消/预算、模块包、质量脚本与 CI | 本轮 Lint、全部包及测试类型检查、21 文件/284 项测试与 Build 通过；同步 abort 后拒绝 Promise 的未处理拒绝已复现并回归 | 精确修复提交 ca86ca5 的 Windows/Ubuntu 完整 CI 已通过；完整外部门槛仍按各里程碑分别记录 |
 | M1：品牌 TUI | 原品牌文本、四档断点、颜色降级、中文多行输入、流消息、审批、任务进度、Diff、Usage 未知值与交付报告；历史恢复和工作区绑定 | 字符网格覆盖 160×42、144×36、116×28、80×24、窄屏及 resize；实际 Ink 输入/生命周期；80×24 Windows ConPTY 观察欢迎页、帮助/Esc、中文两行 bracketed paste 不误提交、空闲 Ctrl+C exit 0 和终端状态恢复 | 用户稍后按 [正式验收步骤](windows-terminal-acceptance.md) 完成 Windows Terminal/Cascadia Mono/TrueColor 截图、IME 与完整 PTY 矩阵；80×24 ConPTY 不替代正式 160×42 及断点验收 |
 | M2：首个真实闭环 | OpenAI Chat、独立 Agent Loop、Context/Prompt、统一工具入口、读取搜索、审批和流式响应 | 历史单个真实 OpenAI-compatible 端点曾完成 4 任务、27 Turn、51 工具、4 次独立 npm exit 0；本轮本地 HTTP、真实文件/Shell/SQLite、构建与独立安装链路通过 | 历史实时端点运行早于本轮改动，不能作为当前代码重新跑过的证据；本轮未重发付费请求，未保存明文 Key |
-| M3：完整工具与权限 | 十个 Phase 1 工具与三模式、权限/路径边界、变更记录、输出限制/脱敏；审批真实 cwd；Git 字面路径、子目录范围与用户改动保护 | 真实临时 FS/Git/Git Bash：中文/CRLF、覆盖/hash 冲突、全目标补丁预校验、回滚失败强停、junction/越界、拒绝/取消、子进程树退出；新增 Git 恶意路径及子目录负向测试；审批 ID 错配/取消审计 | 当前 OS 用户权限下的受控执行，不是 OS Sandbox；本轮远端矩阵仍待核实 |
+| M3：完整工具与权限 | 十个 Phase 1 工具与三模式、权限/路径边界、变更记录、输出限制/脱敏；审批真实 cwd；Git 字面路径、子目录范围与用户改动保护 | 真实临时 FS/Git/Git Bash：中文/CRLF、覆盖/hash 冲突、全目标补丁预校验、回滚失败强停、junction/越界、拒绝/取消、子进程树退出；新增 Git 恶意路径及子目录负向测试；审批 ID 错配/取消审计 | 当前 OS 用户权限下的受控执行，不是 OS Sandbox；本轮 ca86ca5 远端双平台矩阵已通过 |
 | M4：全部模型接入 | openai-chat、openai-responses、anthropic-messages、ollama-chat 四独立协议；Qwen/自定义模板；环境变量凭据引用、增改/切换/探针 | 四协议本地 HTTP 真实网络覆盖分片 UTF-8/JSON、多工具关联、多轮、终止/断流、错误/超时/取消、Usage 缺失；历史一个真实兼容端点有证据 | 用户明确其余真实协议暂不配置，保留未验收；这是用户主动暂缓的端点验收，不列为本轮已确认代码缺失。本地服务不能替代逐供应商实测 |
 | M5：会话与任务执行 | Worker SQLite 原子事件/快照；可选版本化 checkpoint 保存原任务、模型、TaskGraph/当前节点、验证基线/报告与累计预算；稳定边界按原图继续；completed/stopped 恢复原报告 | SQLite close/reopen、独立 Node 进程、构建后 CLI 续跑；不重规划/不重工具副作用，verification_result 不重 Shell；事务/序号/并发/初始化/关闭；模型/目录/Provider 拒绝；state/phase 联校验防伪完成；用户权限审计 | 未完成请求/工具意图、不完整批次、未知副作用或无安全 checkpoint 的 legacy 活动状态进入 needs_review。真实崩溃遗留锁仍需人工检查，不自动清锁，不宣称高级容灾 |
 | M6：验证与有限恢复 | 真实 package scripts 发现/冻结、客观报告、有限重试/修复；Turn/工具/活动时间/重试/修复跨重启累计；有界项目分析和上下文压缩 | 检查先失败→证据修复→成功；删改原脚本不假绿；预算/基线不重置、存储拒绝计数回滚；普通/压缩请求先持久化消耗；压缩保留目标/验收/决策/剩余工作及完整工具交换；审批 requested/decided、拒绝/取消/错 ID/等待重启 | 当前验证发现 Node package scripts，无客观检查明确失败；自然语言条件不能单靠模型声明证明。合法变更冻结脚本需人工核实，摘要是非权威历史而非长期记忆 |
-| M7：集成与分发 | 非交互 CLI、NDJSON、固定退出码、Session/Provider、包资源/Worker、CI 矩阵及手动 Release 门禁 | 全量 Check；CLI 真实 HTTP/FS/Shell/SQLite E2E；timeout 124、取消 130、非交互审批 3；独立安装编码失败修复、外部测试、重复 resume 和事件一致 | 本轮最终 SHA 的 CI 待 Push 后实测；正式 Windows Terminal/完整 PTY 待用户验收；无正式发布指令，不发布 Release/Tag |
+| M7：集成与分发 | 非交互 CLI、NDJSON、固定退出码、Session/Provider、包资源/Worker、CI 矩阵及手动 Release 门禁 | 全量 Check；CLI 真实 HTTP/FS/Shell/SQLite E2E；timeout 124、取消 130、非交互审批 3；独立安装编码失败修复、外部测试、重复 resume 和事件一致 | 修复提交 ca86ca5 的双平台完整 CI 已通过；正式 Windows Terminal/完整 PTY 待用户验收；无正式发布指令，不发布 Release/Tag |
 
 ## 本轮实现与安全边界
 
@@ -47,7 +47,7 @@
 
 - 用户明确其余真实供应商暂不配置，保留未验收；不以本地 HTTP 替代，也不将暂缓描述成已验收。
 - 用户稍后按 [Windows Terminal 验收步骤](windows-terminal-acceptance.md) 完成正式截图、IME 和完整 PTY。80×24 ConPTY 是补充，不能替代正式视觉基线。
-- 本轮本地质量与独立安装验收通过，生产代码 ef6ea5b945d1fe4c4d65673f5a35a660f63a843f 已 Commit/Push；其 Ubuntu CI 通过，Windows 的 HTTP 夹具端口失败已修，修复后的精确 SHA 双平台 CI 待核实，当前不得写全部通过。
+- 本轮本地质量与独立安装验收通过，生产代码 ef6ea5b945d1fe4c4d65673f5a35a660f63a843f 已 Commit/Push；其 Ubuntu CI 通过，Windows 的 HTTP 夹具端口失败已修，修复提交 ca86ca5e7457c97c626fcbbf042fa69f58d18009 的运行 43705292641 已核实双平台全部成功，未通过的外部门槛仍保留。
 - 已有 Release/版本/说明门禁；未发布 Release/Tag。未引入 Multi-Agent、长期记忆、MCP/Web Research、OS Sandbox、Git Worktree 或并行工作区。
 
 ## 历史真实端点证据
@@ -73,4 +73,4 @@
 
 运行 43704103222 / ef6ea5b 的 Windows 结果为 282 pass、1 fail、1 平台 skip；唯一失败为 OpenAI Responses 断流场景的 HTTP 服务监听 `EACCES`，随后清理未启动服务又产生 `Server is not running`。此时测试尚未请求协议适配器，不能归为协议功能已失败或已通过。Ubuntu 同提交全部质量与安装验收通过。原始脱敏状态见 [ci-continuation-failed-2026-11-15.json](acceptance/ci-continuation-failed-2026-11-15.json)。
 
-测试现改由操作系统 `listen(0, 127.0.0.1)` 分配非特权回环端口，成功监听才纳入清理；不放宽权限、不重试掩盖错误、不删协议断言。新增异步 EACCES 回归验证原错误身份、未启动服务不清理以及监听器无泄漏。定向 53/53 及模型类型检查、ESLint 已实际通过，此后完整 pnpm check 实际通过：21 文件、284 pass、1 平台 skip，18:38:03 开始，108.99 秒；新提交远端结果待核实。
+测试现改由操作系统 `listen(0, 127.0.0.1)` 分配非特权回环端口，成功监听才纳入清理；不放宽权限、不重试掩盖错误、不删协议断言。新增异步 EACCES 回归验证原错误身份、未启动服务不清理以及监听器无泄漏。定向 53/53 及模型类型检查、ESLint 已实际通过，此后完整 pnpm check 实际通过：21 文件、284 pass、1 平台 skip，18:38:03 开始，108.99 秒；修复提交 ca86ca5 的精确远端运行 43705292641 已完成，Windows 与 Ubuntu 的完整检查和安装产物编码验收均 success。
