@@ -1,8 +1,9 @@
-import { ElvionError, PermissionModeSchema } from '@elvion/kernel';
+import { BudgetLimitsSchema, ElvionError, PermissionModeSchema } from '@elvion/kernel';
+export function parseVerificationTimeout(value: unknown): number { return BudgetLimitsSchema.shape.toolTimeoutMs.unwrap().max(1_800_000).parse(Number(value)); }
 export function parseArguments(args: string[]): { positionals:string[]; flags:Record<string,string|boolean> } {
   const positionals:string[]=[]; const flags:Record<string,string|boolean>={};
   const booleans=new Set(['json','help','version']);
-  const values=new Set(['permissions','provider','workspace','name','protocol','url','model','key-env','data-dir','tools','timeout']);
+  const values=new Set(['permissions','provider','workspace','name','protocol','url','model','key-env','data-dir','tools','timeout','verification-timeout']);
   for(let i=0;i<args.length;i++){
     const arg=args[i]; if(!arg)continue;
     if(arg==='--'){positionals.push(...args.slice(i+1));break;}
@@ -16,6 +17,7 @@ export function parseArguments(args: string[]): { positionals:string[]; flags:Re
     flags[key]=value;
   }
   if(flags['permissions'])PermissionModeSchema.parse(flags['permissions']);
+  if(flags['verification-timeout']!==undefined)parseVerificationTimeout(flags['verification-timeout']);
   if(!flags['help']&&!flags['version'])validateCommand(positionals,flags);
   return {positionals,flags};
 }
@@ -23,8 +25,8 @@ function validateCommand(positionals:string[],flags:Record<string,string|boolean
   const [command,action]=positionals;
   const common=['json','workspace','data-dir'];
   let allowed=common;let count=0;
-  if(command===undefined){allowed=[...common,'permissions','provider'];}
-  else if(command==='run'){allowed=[...common,'permissions','provider'];count=2;}
+  if(command===undefined){allowed=[...common,'permissions','provider','verification-timeout'];}
+  else if(command==='run'){allowed=[...common,'permissions','provider','verification-timeout'];count=2;}
   else if(command==='doctor'){count=1;}
   else if(command==='sessions'&&action==='list'){count=2;}
   else if(command==='resume'){count=2;}
@@ -50,6 +52,7 @@ Usage:
   elvion providers test <id>
   elvion doctor [--json]
 Options: --permissions ask|auto-edit|full-access --workspace <path> --provider <id> --data-dir <path>
+New executions: --verification-timeout <ms> (1–1800000, default 120000). Resume retains its saved timeout.
 Protocols: openai-chat, openai-responses, anthropic-messages, ollama-chat
 Exit codes: 0 success, 1 failed, 2 configuration, 3 approval required, 124 timeout, 130 cancelled.
 Permission modes control tool execution; they are not an operating system sandbox.`;

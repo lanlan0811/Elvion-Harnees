@@ -33,6 +33,7 @@ TUI 通过 `/provider` 新增、编辑、测试及切换配置，`/model` 切换
 
 ```powershell
 node dist/cli.js run "分析并修复项目中的类型错误" --json --permissions auto-edit
+node dist/cli.js run "修复项目并运行较慢的检查" --json --permissions full-access --verification-timeout 300000
 node dist/cli.js sessions list --json
 node dist/cli.js resume <会话ID> --json
 ```
@@ -43,7 +44,7 @@ node dist/cli.js resume <会话ID> --json
 
 非交互执行不会猜测批准，需审批时返回 `approval_required`、退出码 3。需要交互批准可用 TUI。完全访问允许执行有副作用的项目脚本，请根据实际任务选择权限。这是受控执行，不提供操作系统级沙箱。
 
-执行先通过独立无工具模型调用建立严格校验的任务 DAG，然后串行完成可验证增量。每个任务的真实项目检查通过后才解锁依赖；验证失败最多修复两轮。默认 50 个模型 Turn、100 次工具调用、30 分钟，Shell 默认 120 秒。当前客观验证发现 Node `package.json` 中的 Lint、Typecheck、Test、Integration、E2E、Build 等脚本；没有可执行检查时会失败并说明未验收。自然语言验收文字本身不构成自动证明。
+执行先通过独立无工具模型调用建立严格校验的任务 DAG，然后串行完成可验证增量。每个任务的真实项目检查通过后才解锁依赖；普通验证失败最多修复两轮，检查超时立即停止后续检查和自动修复，返回超时 124。默认 50 个模型 Turn、100 次工具调用、30 分钟，Shell 默认 120 秒。`--verification-timeout <毫秒>` 为新 CLI 任务或 TUI 启动配置独立检查超时（1–1800000，默认 120000），恢复使用原会话预算，不能覆盖；供应商 `--timeout` 仍只设置模型请求超时。当前客观验证发现 Node `package.json` 中的 Lint、Typecheck、Test、Integration、E2E、Build 等脚本；没有可执行检查时会失败并说明未验收。自然语言验收文字本身不构成自动证明。
 
 会话保存事件、消息、权限、任务图和稳定检查点。CLI `resume` 与 TUI `/resume <id>` 继续原任务，保留原模型、验证脚本基线和累计预算，不重新规划或重放已完成操作；已完成会话只恢复交付报告。完整工具批次、已持久化的验证结果及任务之间可安全继续；未确认的请求、工具副作用或不完整批次进入 `needs_review`。失败、取消和超时终态不会自动重启，新的任务使用 `/new`。旧版活动会话没有检查点时仍需人工核实。工作区锁防止并发执行；真实进程崩溃留下的锁必须先检查进程、文件和 Git 状态，再显式处理，不能自动删除。
 

@@ -12,7 +12,7 @@ import type { SessionSnapshot } from '../../packages/session/src/index.js';
 import { TaskGraph } from '../../packages/task/src/index.js';
 import { ToolRuntime } from '../../packages/tool/src/index.js';
 import { BudgetTracker, ElvionError, EventSequencer } from '../../packages/kernel/src/index.js';
-import type { ApprovalHandler, JsonObject, ModelEvent, ModelMessage, ModelRequest, ModelRuntime } from '../../packages/kernel/src/index.js';
+import type { ApprovalHandler, EventEnvelope, JsonObject, ModelEvent, ModelMessage, ModelRequest, ModelRuntime } from '../../packages/kernel/src/index.js';
 
 /** Scripted model events validate local engine behavior, never real provider acceptance. */
 class ScriptedModel implements ModelRuntime {
@@ -117,6 +117,50 @@ describe('real local execution with scripted model events', () => {
     for (const event of events) expect(persisted[event.sequence - 1]).toEqual(event);
     expect(persisted.filter(event => event.type === 'tool.started' && typeof event.payload === 'object' && event.payload !== null && !Array.isArray(event.payload) && event.payload['source'] === 'verification')).toHaveLength(4);
     expect(await readdir(join(directory, 'locks'))).toEqual([]);
+  }, 120_000);
+  it.each(['new execution', 'verification checkpoint resume'] as const)('stops a real verification timeout without repair or later checks: %s', async mode => {
+    await writeFile(join(directory, 'package.json'), JSON.stringify({ private: true, scripts: { test: 'node wait.mjs', build: 'node forbidden.mjs' } }));
+    await writeFile(join(directory, 'wait.mjs'), "import { writeFileSync } from 'node:fs'; writeFileSync('waiting.pid', String(process.pid)); setInterval(() => {}, 1000);");
+    await writeFile(join(directory, 'forbidden.mjs'), "import { writeFileSync } from 'node:fs'; writeFileSync('later-check-ran.txt', 'must not run');");
+    const runtime = new ScriptedModel([delivery()]);
+    const input = { ...options(runtime), permissions: 'full-access' as const, budget: { toolTimeoutMs: 5_000 } };
+    let events: EventEnvelope[]; let sessionId: string | undefined;
+    if (mode === 'verification checkpoint resume') {
+      const iterator = executeTask(input)[Symbol.asyncIterator]();
+      try {
+        while (true) {
+          const next = await iterator.next();
+          if (next.done) throw new Error('Missing durable timeout report');
+          if (next.value.type === 'verification.finished') { sessionId = next.value.sessionId; break; }
+        }
+      } finally { await iterator.return?.(); }
+      const saved = (await repository.get(sessionId!))!;
+      expect(saved.checkpoint).toMatchObject({ phase: 'verification_result', safeToResume: true, lastReport: { passed: false, checks: [{ name: 'test', status: 'timed_out' }] } });
+      await repository.close(); repository = await SessionRepository.open(join(directory, 'sessions.sqlite'));
+      const resumedRuntime = new ScriptedModel([]);
+      events = await collect(executeTask({ ...options(resumedRuntime), session: (await repository.get(saved.id))! }));
+      expect(resumedRuntime.requests).toHaveLength(0);
+      expect(events.some(event => event.type === 'tool.started' || event.type === 'verification.started')).toBe(false);
+    } else {
+      events = await collect(executeTask(input)); sessionId = events[0]!.sessionId;
+    }
+    expect(runtime.requests).toHaveLength(1);
+    expect(events.at(-1)?.type).toBe('execution.timed_out');
+    expect(events.at(-1)?.payload).toMatchObject({ error: { code: 'timeout' }, budget: { repairs: 0 }, tasks: [{ status: 'failed' }] });
+    const persisted = await repository.events(sessionId!);
+    expect(persisted.some(event => event.type === 'execution.repair' || event.type === 'execution.retry')).toBe(false);
+    const reports = persisted.filter(event => event.type === 'verification.finished');
+    expect(reports).toHaveLength(1);
+    expect(reports[0]?.payload).toMatchObject({ passed: false, checks: [{ name: 'test', command: ['npm', 'run', 'test'], exitCode: null, status: 'timed_out' }] });
+    expect((reports[0]!.payload as { checks: unknown[] }).checks).toHaveLength(1);
+    expect(persisted.filter(event => event.type === 'tool.started' && JSON.stringify(event.payload).includes('npm run test'))).toHaveLength(1);
+    expect(persisted.some(event => event.type === 'tool.started' && JSON.stringify(event.payload).includes('npm run build'))).toBe(false);
+    expect(reports[0]!.sequence).toBeLessThan(events.at(-1)!.sequence);
+    expect((await repository.get(sessionId!))).toMatchObject({ state: 'timed_out', checkpoint: { phase: 'stopped', budget: { usage: { repairs: 0 } } } });
+    const pid = Number(await readFile(join(directory, 'waiting.pid'), 'utf8'));
+    expect(Number.isSafeInteger(pid) && pid > 0).toBe(true);
+    expect(() => process.kill(pid, 0)).toThrow();
+    await expect(readFile(join(directory, 'later-check-ran.txt'))).rejects.toMatchObject({ code: 'ENOENT' });
   }, 120_000);
   it('returns approval_required in noninteractive ask mode without touching files', async () => {
     const runtime = new ScriptedModel([calls(tool('write_file', { path: 'blocked.txt', content: 'must not exist' }))]);

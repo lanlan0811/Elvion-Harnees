@@ -11,8 +11,15 @@ import { SessionRepository, type SessionSnapshot } from '@elvion/session';
 import { appendAssistantText, appendUiMessage, main, MAX_UI_MESSAGE_CHARACTERS, MAX_UI_MESSAGES, reportFatal, resumeTuiSession, runExecution, saveSessionPermissions, saveTuiModel, saveTuiProvider, testProvider, tuiExecutionSettings, type ApplicationSettings } from './application.js';
 import { parseArguments } from './arguments.js';
 import type { UiMessage } from './ui/types.js';
+import { initialDiagnostics, observeStorage, projectDiagnostics, projectDiagnosticFailure, recordProviderProbe, runtimeHealth } from './health.js';
 
 describe('CLI argument contracts', () => {
+  it('accepts a bounded verification timeout only for new execution entry points',()=>{
+    for(const value of ['1','120000','1800000']){expect(parseArguments(['run','task','--verification-timeout',value]).flags['verification-timeout']).toBe(value);expect(parseArguments(['--verification-timeout',value]).flags['verification-timeout']).toBe(value);}
+    for(const value of ['0','-1','1.2','NaN','1800001','Infinity'])expect(()=>parseArguments(['run','task','--verification-timeout',value])).toThrow();
+    for(const args of [['resume','saved'],['doctor'],['providers','test','p'],['providers','add','p'],['sessions','list']])expect(()=>parseArguments([...args,'--verification-timeout','1000'])).toThrow();
+    expect(parseArguments(['providers','edit','p','--timeout','3000']).flags['timeout']).toBe('3000');
+  });
   it.each([['providers','list','extra'],['providers','test'],['providers','edit'],['doctor','extra'],['resume','id','extra'],['sessions','list','extra'],['run','two','separate'],['run','task','--model','unused'],['resume','id','--permissions','full-access'],['providers','list','--provider','unused'],['--json'],['-x']])('rejects missing, surplus and ignored arguments %j',(...args:string[])=>{expect(()=>parseArguments(args)).toThrow();});
   it('accepts quoted tasks and a delimiter for task text beginning with a dash',()=>{
     expect(parseArguments(['run','quoted task','--permissions','ask']).positionals).toEqual(['run','quoted task']);
@@ -105,6 +112,37 @@ describe('provider configuration transactions and local HTTP probe',()=>{
       await expect(main(['providers','add','local','--protocol','openai-chat','--url','https://example.test/v1','--model',secret,'--data-dir',directory,'--workspace',directory],vi.fn())).rejects.toMatchObject({code:'configuration_error',message:'Inline credentials are not accepted. Use apiKeyEnv with an environment variable name.'});
       expect(stdout).not.toHaveBeenCalled();await expect(readFile(join(directory,'providers.json'))).rejects.toMatchObject({code:'ENOENT'});
     }finally{stdout.mockRestore();}
+  });
+  it('replaces a successful provider probe with the actual HTTP 401 execution failure',async()=>{
+    let requests=0;const separator=String.fromCharCode(10,10);
+    server=createServer((_request,response)=>{requests++;if(requests===1){response.writeHead(200,{'content-type':'text/event-stream'});response.end('data: '+JSON.stringify({choices:[{index:0,delta:{content:'OK'},finish_reason:'stop'}]})+separator+'data: [DONE]'+separator);}else{response.writeHead(401);response.end();}});
+    server.listen(0,'127.0.0.1');await once(server,'listening');const address=server.address();if(!address||typeof address==='string')throw new Error('Missing port');
+    const provider={...config,baseUrl:'http://127.0.0.1:'+address.port+'/v1'};settings.providers=[provider];
+    await testProvider(settings,'local',new AbortController().signal);let diagnostics=recordProviderProbe(initialDiagnostics(true),provider,true);expect(runtimeHealth(diagnostics,provider).label).toBe('Connected');
+    const events:EventEnvelope[]=[];
+    expect(await runExecution(settings,{task:'Read project',signal:new AbortController().signal,onEvent:event=>{events.push(event);diagnostics=projectDiagnostics(diagnostics,provider,event);}})).toBe(1);
+    expect(events.at(-1)).toMatchObject({type:'execution.failed',payload:{error:{code:'model_error',details:{status:401}}}});expect(runtimeHealth(diagnostics,provider).state).toBe('error');expect(requests).toBe(2);
+  });
+  it('reports a real repository failure and recovers only after a subsequent successful storage operation',async()=>{
+    settings.providers=[config];await mkdir(join(directory,'sessions.sqlite'));
+    let diagnostics=initialDiagnostics(true);const onStorageState=vi.fn((okay:boolean)=>{diagnostics=observeStorage(diagnostics,okay);});
+    await expect(runExecution(settings,{task:'Storage unavailable',signal:new AbortController().signal,onStorageState,onEvent:event=>{diagnostics=projectDiagnostics(diagnostics,config,event);}})).rejects.toMatchObject({code:'storage_error'});
+    expect(onStorageState).toHaveBeenLastCalledWith(false);expect(diagnostics.storage.state).toBe('error');
+    await rm(join(directory,'sessions.sqlite'),{recursive:true});
+    await expect(resumeTuiSession(settings,randomUUID(),{onStorageState,onLoaded:vi.fn(),continueExecution:vi.fn()})).rejects.toMatchObject({code:'not_found'});
+    expect(onStorageState).toHaveBeenLastCalledWith(true);expect(diagnostics.storage.state).toBe('ok');
+    diagnostics=projectDiagnosticFailure(diagnostics,config,new ElvionError('cancelled','Cancel'));expect(diagnostics.storage.state).toBe('ok');
+  });
+  it('passes the configured verification timeout through the actual application and saved checkpoint', {timeout:60_000}, async()=>{
+    const separator=String.fromCharCode(10,10);let requests=0;
+    server=createServer((request,response)=>{let text='';request.on('data',chunk=>{text+=String(chunk);});request.on('end',()=>{requests++;const body=JSON.parse(text) as {tools?:unknown[]};const content=body.tools?'Ready for independent verification.':JSON.stringify([{id:'verify',title:'Run original check',acceptance:['Original test passes']}]);response.writeHead(200,{'content-type':'text/event-stream'});response.end('data: '+JSON.stringify({choices:[{index:0,delta:{content},finish_reason:'stop'}]})+separator+'data: [DONE]'+separator);});});
+    server.listen(0,'127.0.0.1');await once(server,'listening');const address=server.address();if(!address||typeof address==='string')throw new Error('Missing port');settings.providers=[{...config,baseUrl:'http://127.0.0.1:'+address.port+'/v1'}];
+    await writeFile(join(directory,'package.json'),JSON.stringify({scripts:{test:'node check.mjs'}}));await writeFile(join(directory,'check.mjs'),'setTimeout(()=>{},5000);');
+    const events:EventEnvelope[]=[];
+    expect(await runExecution(settings,{task:'Validate timeout forwarding',permissions:'full-access',verificationTimeoutMs:60,signal:new AbortController().signal,onEvent:event=>{events.push(event);}})).toBe(124);
+    expect(events.at(-1)?.type).toBe('execution.timed_out');expect(requests).toBe(2);
+    const repository=await SessionRepository.open(join(directory,'sessions.sqlite'));let saved:SessionSnapshot|undefined;try{saved=await repository.get(events[0]!.sessionId);expect(saved?.checkpoint?.budget.limits.toolTimeoutMs).toBe(60);}finally{await repository.close();}
+    await expect(runExecution(settings,{task:saved!.task,session:saved!,verificationTimeoutMs:120000,signal:new AbortController().signal,onEvent:()=>{}})).rejects.toMatchObject({code:'configuration_error'});
   });
   it('continues an active checkpoint through the CLI application with saved task and permissions', { timeout: 60_000 }, async()=>{
     let requests=0;

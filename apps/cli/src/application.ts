@@ -6,17 +6,18 @@ import { SessionRepository, defaultDataDirectory, type SessionSnapshot } from '@
 import { ToolRuntime, findGitBash } from '@elvion/tool';
 import { executeTask } from '@elvion/execution';
 import { ElvionError, EventSequencer, PermissionModeSchema, serializeError, type ApprovalHandler, type EventEnvelope, type PermissionMode } from '@elvion/kernel';
-import { parseArguments, HELP } from './arguments.js';
+import { parseArguments, parseVerificationTimeout, HELP } from './arguments.js';
 import { cleanText } from './ui/text.js';
 export { appendAssistantText, appendUiMessage, MAX_UI_MESSAGE_CHARACTERS, MAX_UI_MESSAGES } from './presentation.js';
 import packageInfo from '../package.json' with { type: 'json' };
 export const VERSION=packageInfo.version;
 export interface ApplicationSettings {dataDirectory:string;workspace:string;providers:ProviderConfig[]}
+async function closeObservedRepository(repository:SessionRepository,onStorageState?: (okay:boolean)=>void):Promise<void>{try{await repository.close();}catch(error){onStorageState?.(false);throw error;}}
 export function tuiExecutionSettings(settings:ApplicationSettings,session?:SessionSnapshot):ApplicationSettings{return session?{...settings,workspace:session.workspace}:settings;}
-export async function resumeTuiSession(settings:ApplicationSettings,id:string,callbacks:{onLoaded:(session:SessionSnapshot,history:EventEnvelope[])=>void;continueExecution:(session:SessionSnapshot)=>Promise<number|void>}):Promise<number|void>{
-  const repository=await SessionRepository.open(join(settings.dataDirectory,'sessions.sqlite'));
-  let session:SessionSnapshot;let history:EventEnvelope[];
-  try{const saved=await repository.get(id);if(!saved)throw new ElvionError('not_found','Session not found');session=saved;history=await repository.events(id);}finally{await repository.close();}
+export async function resumeTuiSession(settings:ApplicationSettings,id:string,callbacks:{onLoaded:(session:SessionSnapshot,history:EventEnvelope[])=>void;continueExecution:(session:SessionSnapshot)=>Promise<number|void>;onStorageState?:(okay:boolean)=>void}):Promise<number|void>{
+  let session:SessionSnapshot|undefined;let history:EventEnvelope[]=[];
+  try{const repository=await SessionRepository.open(join(settings.dataDirectory,'sessions.sqlite'));try{session=await repository.get(id);if(session)history=await repository.events(id);}finally{await repository.close();}callbacks.onStorageState?.(true);}catch(error){callbacks.onStorageState?.(false);throw error;}
+  if(!session)throw new ElvionError('not_found','Session not found');
   callbacks.onLoaded(session,history);
   return await callbacks.continueExecution(session);
 }
@@ -44,18 +45,19 @@ export async function saveTuiModel(settings:ApplicationSettings,providerId:strin
   const current=selectProvider(settings,providerId);
   return await saveTuiProvider(settings,{...current,model},'edit');
 }
-export async function saveSessionPermissions(settings:ApplicationSettings,session:SessionSnapshot,mode:PermissionMode):Promise<SessionSnapshot>{
+export async function saveSessionPermissions(settings:ApplicationSettings,session:SessionSnapshot,mode:PermissionMode,onStorageState?:(okay:boolean)=>void):Promise<SessionSnapshot>{
   const permissions=PermissionModeSchema.parse(mode);
-  const repository=await SessionRepository.open(join(settings.dataDirectory,'sessions.sqlite'));
+  let repository:SessionRepository;try{repository=await SessionRepository.open(join(settings.dataDirectory,'sessions.sqlite'));}catch(error){onStorageState?.(false);throw error;}
   try{
     const current=await repository.get(session.id);
+    onStorageState?.(true);
     if(!current)throw new ElvionError('not_found','Session not found');
     if(current.lastSequence!==session.lastSequence)throw new ElvionError('conflict','Session changed. Reload it before changing permissions.');
     if(['running','awaiting_approval','verifying','recovering'].includes(current.state))throw new ElvionError('conflict','Review or finish the saved execution before changing its permissions.');
     const event=new EventSequencer({sessionId:current.id,nextSequence:current.lastSequence+1}).next('session.permissions_changed',{previous:current.permissions,permissions,source:'user'});
     const next={...current,permissions,lastSequence:event.sequence,updatedAt:event.timestamp};
     await repository.save(next,[event]);return next;
-  }finally{await repository.close();}
+  }catch(error){if(error instanceof ElvionError&&error.code==='storage_error')onStorageState?.(false);throw error;}finally{await closeObservedRepository(repository,onStorageState);}
 }
 export async function testProvider(settings:ApplicationSettings,id:string|undefined,signal:AbortSignal):ReturnType<typeof probeProvider>{
   const result=await probeProvider(selectProvider(settings,id),{signal});
@@ -76,17 +78,19 @@ export function selectProvider(settings:ApplicationSettings,id?:string):Provider
   return config;
 }
 export function exitCode(type:string):number{return type==='execution.completed'?0:type==='execution.approval_required'?3:type==='execution.timed_out'?124:type==='execution.cancelled'?130:1;}
-export async function runExecution(settings:ApplicationSettings,options:{task:string;providerId?:string;permissions?:string;signal:AbortSignal;approve?:ApprovalHandler;session?:SessionSnapshot;onEvent:(event:EventEnvelope)=>void|Promise<void>}):Promise<number>{
+export async function runExecution(settings:ApplicationSettings,options:{task:string;providerId?:string;permissions?:string;verificationTimeoutMs?:number;signal:AbortSignal;approve?:ApprovalHandler;session?:SessionSnapshot;onStorageState?:(okay:boolean)=>void;onEvent:(event:EventEnvelope)=>void|Promise<void>}):Promise<number>{
+  if(options.session&&options.verificationTimeoutMs!==undefined)throw new ElvionError('configuration_error','Resume cannot override the saved verification timeout');
+  const verificationTimeoutMs=options.verificationTimeoutMs===undefined?undefined:parseVerificationTimeout(options.verificationTimeoutMs);
   const completed=options.session?.state==='completed';
   const provider=completed?settings.providers.find(provider=>provider.id===options.session?.providerId):selectProvider(settings,options.session?.providerId??options.providerId);
   const providerId=options.session?.providerId??provider!.id;
   const model=completed?options.session?.checkpoint?.model??provider?.model??'saved-session':provider!.model;
   const runtime=completed?{stream(){return{[Symbol.asyncIterator](){return{async next():Promise<never>{throw new ElvionError('invalid_state','Completed sessions must not request a model');}};}};}}:new ProviderRuntime(provider!);
-  const repository=await SessionRepository.open(join(settings.dataDirectory,'sessions.sqlite'));
+  let repository:SessionRepository;try{repository=await SessionRepository.open(join(settings.dataDirectory,'sessions.sqlite'));}catch(error){options.onStorageState?.(false);throw error;}
   let code=1;
   try{
-    for await(const event of executeTask({task:options.task,workspace:options.session?.workspace??settings.workspace,providerId,model,runtime,repository,signal:options.signal,tools:new ToolRuntime(),lockDirectory:join(settings.dataDirectory,'locks'),...(options.permissions?{permissions:PermissionModeSchema.parse(options.permissions)}:{}),...(options.approve?{approve:options.approve}:{}),...(options.session?{session:options.session}:{})})){await options.onEvent(event);if(event.type.startsWith('execution.'))code=exitCode(event.type);}
-  }finally{await repository.close();}
+    for await(const event of executeTask({task:options.task,workspace:options.session?.workspace??settings.workspace,providerId,model,runtime,repository,signal:options.signal,tools:new ToolRuntime(),lockDirectory:join(settings.dataDirectory,'locks'),...(verificationTimeoutMs===undefined?{}:{budget:{toolTimeoutMs:verificationTimeoutMs}}),...(options.permissions?{permissions:PermissionModeSchema.parse(options.permissions)}:{}),...(options.approve?{approve:options.approve}:{}),...(options.session?{session:options.session}:{})})){options.onStorageState?.(true);await options.onEvent(event);if(event.type.startsWith('execution.'))code=exitCode(event.type);}
+  }catch(error){if(error instanceof ElvionError&&error.code==='storage_error')options.onStorageState?.(false);throw error;}finally{await closeObservedRepository(repository,options.onStorageState);}
   return code;
 }
 export async function main(args:string[],startTui:(settings:ApplicationSettings,flags:Record<string,string|boolean>)=>Promise<void>):Promise<number>{
@@ -132,7 +136,7 @@ export async function main(args:string[],startTui:(settings:ApplicationSettings,
   const task=session?.task??positionals[1]?.trim()??'';
   if(!task)throw new ElvionError('configuration_error','A task is required');
   const cancellation=new AbortController();const cancel=():void=>cancellation.abort(new ElvionError('cancelled','User cancelled'));process.on('SIGINT',cancel);
-  try{return await runExecution(settings,{task,signal:cancellation.signal,...(session?{session}:{}),...(typeof flags['provider']==='string'?{providerId:flags['provider']}:{}),...(typeof flags['permissions']==='string'?{permissions:flags['permissions']}:{}),onEvent:event=>{if(json)output(event);else if(event.type==='model.text'&&typeof event.payload==='object'&&event.payload!==null&&!Array.isArray(event.payload)&&typeof event.payload['text']==='string')process.stdout.write(event.payload['text']);else process.stderr.write(`${event.type} ${JSON.stringify(event.payload)}\n`);}});}finally{process.removeListener('SIGINT',cancel);}
+  try{return await runExecution(settings,{task,signal:cancellation.signal,...(typeof flags['verification-timeout']==='string'?{verificationTimeoutMs:Number(flags['verification-timeout'])}:{}),...(session?{session}:{}),...(typeof flags['provider']==='string'?{providerId:flags['provider']}:{}),...(typeof flags['permissions']==='string'?{permissions:flags['permissions']}:{}),onEvent:event=>{if(json)output(event);else if(event.type==='model.text'&&typeof event.payload==='object'&&event.payload!==null&&!Array.isArray(event.payload)&&typeof event.payload['text']==='string')process.stdout.write(event.payload['text']);else process.stderr.write(`${event.type} ${JSON.stringify(event.payload)}\n`);}});}finally{process.removeListener('SIGINT',cancel);}
 }
 export function reportFatal(error:unknown,json:boolean):number{
   const invalid=error instanceof SyntaxError||(error instanceof Error&&error.name==='ZodError');

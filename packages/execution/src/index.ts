@@ -251,6 +251,8 @@ export async function* executeTask(options: ExecutionOptions): AsyncIterable<Eve
       checkpoint.lastReport = report; checkpoint.phase = 'verification_result'; checkpoint.safeToResume = true;
       yield await saveEvent('verification.finished', report as unknown as JsonValue);
       }
+      const timedOut = report.checks.find(check => check.status === 'timed_out');
+      if (timedOut) throw new ElvionError('timeout', timedOut.failureReason ?? 'Verification command exceeded its timeout', { details: { check: timedOut.name, command: timedOut.command } });
       if (report.passed) {
         graph.transition(currentTask.id, 'completed', { verified: true });
         const completedId = currentTask.id; currentTask = undefined; checkpoint.phase = 'between_tasks';

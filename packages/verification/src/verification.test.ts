@@ -39,4 +39,17 @@ describe('verification boundaries', () => {
     await expect(verifyProject({ tools, context, onToolStarted: async () => { throw new Error('disk full'); } })).rejects.toThrow('disk full');
     expect(execute).not.toHaveBeenCalled();
   });
+  it('keeps timeout evidence and stops before later verification commands', async () => {
+    const tools = new ToolRuntime();
+    const execute = vi.spyOn(tools, 'execute').mockImplementation(async call => {
+      if (call.name === 'read_file') return { toolCallId: call.id, status: 'success', durationMs: 0, truncated: false, output: { content: JSON.stringify({ scripts: { lint: 'node lint.mjs', test: 'node test.mjs', build: 'node build.mjs' } }) } };
+      if (call.arguments['command'] === 'npm run lint') return { toolCallId: call.id, status: 'success', durationMs: 1, truncated: false, output: { exitCode: 0 } };
+      return { toolCallId: call.id, status: 'error', durationMs: 25, truncated: false, error: { code: 'timeout', message: 'Actual process timeout', retryable: false } };
+    });
+    const report = await verifyProject({ tools, context, timeoutMs: 25 });
+    expect(report).toMatchObject({ passed: false, checks: [{ name: 'lint', exitCode: 0, status: 'passed' }, { name: 'test', exitCode: null, status: 'timed_out', failureReason: 'Actual process timeout' }] });
+    expect(report.checks).toHaveLength(2);
+    expect(JSON.parse(report.checks[1]!.evidence)).toMatchObject({ status: 'error', error: { code: 'timeout' } });
+    expect(execute.mock.calls.filter(([call]) => call.name === 'bash').map(([call]) => call.arguments['command'])).toEqual(['npm run lint', 'npm run test']);
+  });
 });

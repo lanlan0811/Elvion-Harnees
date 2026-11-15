@@ -102,6 +102,7 @@ export async function verifyProject(options: VerificationOptions): Promise<Verif
     const exitCode = typeof output['exitCode'] === 'number' ? output['exitCode'] : null;
     const passed = result.status === 'success' && exitCode === 0;
     checks.push({ ...check, exitCode, status: passed ? 'passed' : result.status === 'error' && result.error.code === 'timeout' ? 'timed_out' : 'failed', evidence: JSON.stringify(result), ...(passed ? {} : { failureReason: result.status === 'error' ? result.error.message : 'Verification command did not exit successfully' }) });
+    if (result.status === 'error' && result.error.code === 'timeout') break;
   }
   return { passed: checks.every(check => check.status === 'passed'), checks };
 }

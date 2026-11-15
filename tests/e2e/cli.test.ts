@@ -6,7 +6,9 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { once } from 'node:events';
 import { pathToFileURL } from 'node:url';
+import { createRequire } from 'node:module';
 import { EventEnvelopeSchema, type EventEnvelope } from '../../packages/kernel/src/index.js';
+import { SessionRepository } from '../../packages/session/src/index.js';
 import { cancelWindowsCli } from './windows-console.js';
 
 const cli = resolve('dist/cli.js');
@@ -69,6 +71,83 @@ async function stream(response: ServerResponse, value: { text: string } | { call
 }
 
 describe('actual built CLI subprocess', { timeout: 90_000 }, () => {
+  it('uses the requested verification timeout and exits 124 without repairing or running later checks', async () => {
+    const manifest = JSON.stringify({ type: 'module', scripts: { test: 'node slow.mjs', build: 'node later.mjs' } });
+    const slow = "import { writeFileSync } from 'node:fs';\nwriteFileSync('slow-started.txt', String(process.pid));\nsetInterval(() => {}, 1000);\n";
+    const later = "import { writeFileSync } from 'node:fs';\nwriteFileSync('later-check.txt', 'must not run');\n";
+    await Promise.all([['package.json', manifest], ['slow.mjs', slow], ['later.mjs', later]].map(([name, content]) => writeFile(join(workspace, name!), content!)));
+    let planning = 0; let coding = 0;
+    await fixture(async (body, response) => {
+      if (!Array.isArray(body['tools'])) { planning++; return stream(response, { text: JSON.stringify([{ id: 'slow-check', title: 'Run the unchanged original project check', dependsOn: [], acceptance: ['Original checks pass'] }]) }); }
+      coding++; return stream(response, { text: 'Handing off to independent verification.' });
+    });
+    const result = await run(['run', '验证项目并保留真实超时', '--json', '--permissions', 'full-access', '--verification-timeout', '3000']);
+    expect(result.code, result.stdout + result.stderr).toBe(124);
+    const emitted = events(result); expect(emitted.at(-1)?.type).toBe('execution.timed_out');
+    expect(emitted.some(event => event.type === 'execution.repair' || event.type === 'execution.retry')).toBe(false);
+    const reports = emitted.filter(event => event.type === 'verification.finished'); expect(reports).toHaveLength(1);
+    expect(reports[0]!.payload).toMatchObject({ passed: false, checks: [{ name: 'test', command: ['npm', 'run', 'test'], exitCode: null, status: 'timed_out' }] });
+    const report = reports[0]!.payload as { checks: unknown[] }; expect(report.checks).toHaveLength(1);
+    expect(JSON.stringify(reports[0]!.payload)).toContain('timeout');
+    const verificationCall = emitted.find(event => event.type === 'tool.started' && event.payload !== null && typeof event.payload === 'object' && !Array.isArray(event.payload) && event.payload['name'] === 'bash');
+    expect(verificationCall?.payload).toMatchObject({ arguments: { command: 'npm run test', timeoutMs: 3000 } });
+    expect(planning).toBe(1); expect(coding).toBe(1);
+    const pid = Number(await readFile(join(workspace, 'slow-started.txt'), 'utf8')); expect(pid).toBeGreaterThan(0);
+    let stopped = false; for (let attempt = 0; attempt < 50; attempt++) { try { process.kill(pid, 0); } catch (error) { if ((error as NodeJS.ErrnoException).code === 'ESRCH') { stopped = true; break; } throw error; } await new Promise(resolve => setTimeout(resolve, 20)); }
+    expect(stopped).toBe(true); await expect(readFile(join(workspace, 'later-check.txt'))).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(await readFile(join(workspace, 'package.json'), 'utf8')).toBe(manifest);
+    const saved = JSON.parse((await run(['sessions', 'list', '--json'])).stdout) as { id: string; state: string }[];
+    expect(saved).toHaveLength(1); expect(saved[0]!.state).toBe('timed_out');
+    const repository = await SessionRepository.open(join(dataDirectory, 'sessions.sqlite'));
+    try { expect((await repository.get(saved[0]!.id))?.checkpoint?.budget.limits.toolTimeoutMs).toBe(3000); } finally { await repository.close(); }
+    const resumed = await run(['resume', saved[0]!.id, '--json']); expect(resumed.code, resumed.stdout + resumed.stderr).toBe(124); const restored = events(resumed); expect(restored.at(-1)?.type).toBe('execution.timed_out'); expect(restored.at(-1)?.payload).toEqual(emitted.at(-1)?.payload); expect(coding).toBe(1); expect(planning).toBe(1);
+    expect(restored.some(event => ['tool.started', 'verification.started', 'verification.finished'].includes(event.type))).toBe(false);
+    await expect(readFile(join(workspace, 'later-check.txt'))).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+  it('repairs actual TypeScript diagnostics across files without changing the original verification gates', async () => {
+    const compiler = createRequire(import.meta.url).resolve('typescript/bin/tsc');
+    const manifest = JSON.stringify({ name: 'elvion-typescript-fixture', type: 'module', scripts: { typecheck: 'node typecheck.mjs', test: 'node check.mjs' } });
+    const configuration = JSON.stringify({ compilerOptions: { target: 'ES2023', module: 'NodeNext', moduleResolution: 'NodeNext', strict: true, noEmit: true, allowImportingTsExtensions: true, types: [] }, include: ['source.ts', 'consumer.ts'] });
+    const checker = ["import { spawnSync } from 'node:child_process';", "const result = spawnSync(process.execPath, [" + JSON.stringify(compiler) + ", '--project', 'tsconfig.json', '--noEmit', '--pretty', 'false'], { stdio: 'inherit' });", 'if (result.error) throw result.error;', 'process.exit(result.status ?? 1);', ''].join('\n');
+    const assertions = ["import assert from 'node:assert/strict';", "import { result } from './consumer.ts';", 'assert.equal(result, 42);', "console.log('verified-typescript-project');", ''].join('\n');
+    const sourceBefore = "export const value: string = '41';\n";
+    const consumerBefore = "import { value } from './source.ts';\nexport const result: number = value;\n";
+    const unchanged: [string, string][] = [['package.json', manifest], ['tsconfig.json', configuration], ['typecheck.mjs', checker], ['check.mjs', assertions]];
+    await Promise.all([...unchanged, ['source.ts', sourceBefore], ['consumer.ts', consumerBefore]].map(([name, content]) => writeFile(join(workspace, name!), content!)));
+    const before = await startProgram(compiler, ['--project', 'tsconfig.json', '--noEmit', '--pretty', 'false']).result;
+    expect(before.code, before.stdout + before.stderr).toBe(2);
+    expect(before.stdout + before.stderr).toContain("consumer.ts(2,14): error TS2322: Type 'string' is not assignable to type 'number'.");
+    let requests = 0; const bodies: Record<string, unknown>[] = [];
+    await fixture(async (body, response) => {
+      if (!Array.isArray(body['tools'])) return stream(response, { text: JSON.stringify([{ id: 'typed-coding', title: 'Repair the existing typed modules and pass their unchanged checks', dependsOn: [], acceptance: ['Original TypeScript typecheck and runtime assertions pass'] }]) });
+      bodies.push(body); requests++;
+      if (requests === 1) return stream(response, { calls: [{ id: 'typed-read-source', name: 'read_file', arguments: { path: 'source.ts' } }, { id: 'typed-read-consumer', name: 'read_file', arguments: { path: 'consumer.ts' } }] });
+      if (requests === 2) return stream(response, { calls: [{ id: 'typed-initial-source', name: 'edit_file', arguments: { path: 'source.ts', oldText: "'41'", newText: "'42'" } }, { id: 'typed-initial-consumer', name: 'edit_file', arguments: { path: 'consumer.ts', oldText: '= value;', newText: '= value + 0;' } }] });
+      if (requests === 4) {
+        expect(JSON.stringify(body)).toContain('Independent verification failed'); expect(JSON.stringify(body)).toContain('TS2322');
+        return stream(response, { calls: [{ id: 'typed-repair-source', name: 'edit_file', arguments: { path: 'source.ts', oldText: "export const value: string = '42';", newText: 'export const value: number = 41;' } }, { id: 'typed-repair-consumer', name: 'edit_file', arguments: { path: 'consumer.ts', oldText: '= value + 0;', newText: '= value + 1;' } }] });
+      }
+      return stream(response, { text: 'Typed changes delivered for independent verification.' });
+    });
+    const result = await run(['run', '修复现有跨文件类型错误并通过原有检查', '--json', '--permissions', 'full-access']);
+    expect(result.code, result.stdout + result.stderr).toBe(0);
+    const emitted = events(result); const reports = emitted.filter(event => event.type === 'verification.finished').map(event => event.payload as { passed: boolean; checks: { name: string; command: string[]; status: string; exitCode: number; evidence: string }[] });
+    expect(reports.map(report => report.passed)).toEqual([false, true]);
+    expect(reports.map(report => report.checks.map(check => [check.name, check.exitCode, check.status]))).toEqual([[['typecheck', 2, 'failed'], ['test', 1, 'failed']], [['typecheck', 0, 'passed'], ['test', 0, 'passed']]]);
+    expect(reports[0]!.checks[0]!.evidence).toContain('TS2322');
+    expect(reports[1]!.checks.map(check => check.command)).toEqual([['npm', 'run', 'typecheck'], ['npm', 'run', 'test']]);
+    expect(reports[1]!.checks[1]!.evidence).toContain('verified-typescript-project');
+    expect(emitted.some(event => event.type === 'execution.repair')).toBe(true); expect(emitted.at(-1)?.type).toBe('execution.completed'); expect(requests).toBe(5);
+    expect(JSON.stringify(bodies[1])).toContain(sourceBefore.trim()); expect(JSON.stringify(bodies[1])).toContain('consumer.ts');
+    expect(await readFile(join(workspace, 'source.ts'), 'utf8')).toBe('export const value: number = 41;\n');
+    expect(await readFile(join(workspace, 'consumer.ts'), 'utf8')).toBe(consumerBefore.replace('= value;', '= value + 1;'));
+    for (const [name, content] of unchanged) expect(await readFile(join(workspace, name), 'utf8')).toBe(content);
+    const after = await startProgram(compiler, ['--project', 'tsconfig.json', '--noEmit', '--pretty', 'false']).result; expect(after.code, after.stdout + after.stderr).toBe(0);
+    const external = await startProgram(join(workspace, 'check.mjs'), []).result; expect(external.code, external.stdout + external.stderr).toBe(0); expect(external.stdout).toContain('verified-typescript-project');
+    const saved = JSON.parse((await run(['sessions', 'list', '--json'])).stdout) as { id: string; state: string }[]; expect(saved).toHaveLength(1); expect(saved[0]!.state).toBe('completed');
+    const resumed = await run(['resume', saved[0]!.id, '--json']); expect(resumed.code, resumed.stdout + resumed.stderr).toBe(0); const restored = events(resumed); expect(restored.at(-1)?.payload).toEqual(emitted.at(-1)?.payload); expect(requests).toBe(5);
+    expect(restored.some(event => ['tool.started', 'verification.started', 'verification.finished'].includes(event.type))).toBe(false);
+  });
   it('continues a durable checkpoint from an exited Node child in a separate CLI process', async () => {
     await writeFile(join(workspace, 'package.json'), JSON.stringify({ type: 'module', scripts: { test: 'node check.mjs' } }));
     await writeFile(join(workspace, 'check.mjs'), `import assert from 'node:assert/strict';\nimport { appendFileSync, existsSync, readFileSync } from 'node:fs';\nassert.equal(readFileSync('first.mjs','utf8'),'export const first = 1;\\n');\nif(existsSync('second.mjs'))assert.equal(readFileSync('second.mjs','utf8'),'export const second = 2;\\n');\nappendFileSync('verification.log','verified\\n');\nconsole.log('checkpoint-real-verification');\n`);
